@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Feed - feed-brain{% endblock %}
+{% block content %}
+<hgroup>
+    <h2>Your Feed</h2>
+    <p>{{ articles | length }} articles</p>
+</hgroup>
+
+<div class="filter-bar">
+    <a href="/" class="{% if not tier_filter %}active{% endif %}">All</a>
+    <a href="/?tier=high" class="{% if tier_filter == 'high' %}active{% endif %}">High</a>
+    <a href="/?tier=medium" class="{% if tier_filter == 'medium' %}active{% endif %}">Medium</a>
+    <a href="/?tier=low" class="{% if tier_filter == 'low' %}active{% endif %}">Low</a>
+</div>
+
+{% if articles %}
+<div class="article-grid">
+    {% for article in articles %}
+    {% include "partials/article_card.html" %}
+    {% endfor %}
+</div>
+{% else %}
+<p>No articles yet. Add some feeds and click <strong>Refresh</strong>.</p>
+{% endif %}
+{% endblock %}

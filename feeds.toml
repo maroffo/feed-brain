@@ -1,0 +1,10 @@
+# ABOUTME: Feed sources configuration (legacy, feeds now managed via web UI).
+# ABOUTME: Kept as reference format; DB is the source of truth.
+
+# Feed sources are managed via the web UI at /feeds
+# This file is kept as documentation of the TOML format for reference.
+#
+# [[feeds]]
+# name = "Simon Willison"
+# url = "https://simonwillison.net/atom/everything/"
+# type = "rss"

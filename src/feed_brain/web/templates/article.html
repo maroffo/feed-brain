@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}{{ article.title }} - feed-brain{% endblock %}
+{% block content %}
+<article>
+    <header>
+        <div class="card-meta">
+            {% if article.tier %}
+            <span class="badge tier-{{ article.tier }}">{{ article.tier | tier_label }}</span>
+            {% endif %}
+            {% if article.category %}
+            <span class="badge category">{{ article.category | category_label }}</span>
+            {% endif %}
+            {% if article.source_name %}
+            <span class="source">{{ article.source_name }}</span>
+            {% endif %}
+        </div>
+        <h2>{{ article.title }}</h2>
+        {% if article.author %}
+        <p class="author">by {{ article.author }}</p>
+        {% endif %}
+        <p><a href="{{ article.url }}" target="_blank" rel="noopener">Original article ↗</a></p>
+    </header>
+
+    {% if article.summary %}
+    <blockquote>
+        <strong>AI Summary:</strong> {{ article.summary }}
+        {% if article.reason %}
+        <br><small>{{ article.reason }}</small>
+        {% endif %}
+    </blockquote>
+    {% endif %}
+
+    <div class="article-content">
+        {{ article.content | default("No content extracted.") }}
+    </div>
+
+    <footer>
+        <div class="feedback-buttons" id="feedback-{{ article.id }}">
+            {% if article.feedback == "approved" %}
+            <span class="feedback-done">Clipping created</span>
+            {% elif article.feedback == "skipped" %}
+            <span class="feedback-done">Skipped</span>
+            {% else %}
+            <button hx-post="/article/{{ article.id }}/feedback?feedback=approved"
+                    hx-target="#feedback-{{ article.id }}"
+                    hx-swap="innerHTML"
+                    class="btn-sm outline">👍 Approve</button>
+            <button hx-post="/article/{{ article.id }}/feedback?feedback=skipped"
+                    hx-target="#feedback-{{ article.id }}"
+                    hx-swap="innerHTML"
+                    class="btn-sm outline secondary">👎 Skip</button>
+            {% endif %}
+        </div>
+    </footer>
+</article>
+
+<p><a href="/">← Back to feed</a></p>
+{% endblock %}

@@ -1,0 +1,37 @@
+<article class="card" id="article-{{ article.id }}">
+    <header>
+        <div class="card-meta">
+            {% if article.tier %}
+            <span class="badge tier-{{ article.tier }}">{{ article.tier | tier_label }}</span>
+            {% endif %}
+            {% if article.category %}
+            <span class="badge category">{{ article.category | category_label }}</span>
+            {% endif %}
+            {% if article.source_name %}
+            <span class="source">{{ article.source_name }}</span>
+            {% endif %}
+        </div>
+        <h3><a href="/article/{{ article.id }}">{{ article.title }}</a></h3>
+    </header>
+    {% if article.summary %}
+    <p class="summary">{{ article.summary }}</p>
+    {% endif %}
+    <footer>
+        <div class="feedback-buttons" id="feedback-{{ article.id }}">
+            {% if article.feedback == "approved" %}
+            <span class="feedback-done">Clipping created</span>
+            {% elif article.feedback == "skipped" %}
+            <span class="feedback-done">Skipped</span>
+            {% else %}
+            <button hx-post="/article/{{ article.id }}/feedback?feedback=approved"
+                    hx-target="#feedback-{{ article.id }}"
+                    hx-swap="innerHTML"
+                    class="btn-sm outline">👍</button>
+            <button hx-post="/article/{{ article.id }}/feedback?feedback=skipped"
+                    hx-target="#feedback-{{ article.id }}"
+                    hx-swap="innerHTML"
+                    class="btn-sm outline secondary">👎</button>
+            {% endif %}
+        </div>
+    </footer>
+</article>

@@ -1,0 +1,36 @@
+# ABOUTME: Git ignore rules for feed-brain project.
+# ABOUTME: Excludes Python artifacts, env files, database, and IDE configs.
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+.venv/
+
+# Environment
+.env
+
+# Database
+*.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# UV
+uv.lock
+
+# Quality reports
+quality_reports/
