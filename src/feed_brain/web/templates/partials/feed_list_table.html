@@ -1,0 +1,30 @@
+<div id="feed-list">
+    {% if sources %}
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>URL</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for source in sources %}
+            <tr id="feed-row-{{ source.id }}">
+                <td>{{ source.name }}</td>
+                <td><small>{{ source.url | truncate(50) }}</small></td>
+                <td>
+                    <button hx-delete="/feeds/{{ source.id }}"
+                            hx-target="#feed-row-{{ source.id }}"
+                            hx-swap="outerHTML"
+                            class="btn-sm outline secondary"
+                            hx-confirm="Remove {{ source.name }}?">Remove</button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p>No feeds configured. Add one above or import an OPML file.</p>
+    {% endif %}
+</div>

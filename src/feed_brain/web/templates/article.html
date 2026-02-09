@@ -22,12 +22,18 @@
     </header>
 
     {% if article.summary %}
-    <blockquote>
-        <strong>AI Summary:</strong> {{ article.summary }}
+    <aside class="ai-analysis">
+        <div class="summary-section">
+            <h6 class="ai-label">AI Summary</h6>
+            <p>{{ article.summary }}</p>
+        </div>
         {% if article.reason %}
-        <br><small>{{ article.reason }}</small>
+        <div class="reason-section">
+            <h6 class="ai-label">Analysis & Reasoning</h6>
+            <p class="reason-text">{{ article.reason }}</p>
+        </div>
         {% endif %}
-    </blockquote>
+    </aside>
     {% endif %}
 
     <div class="article-content">
@@ -54,5 +60,17 @@
     </footer>
 </article>
 
-<p><a href="/">← Back to feed</a></p>
+<nav class="article-nav">
+    {% if prev_id %}
+    <a href="/article/{{ prev_id }}{{ tier_param }}">← Previous</a>
+    {% else %}
+    <span></span>
+    {% endif %}
+    <a href="/{{ '?tier=' + tier_filter if tier_filter else '' }}">Back to feed</a>
+    {% if next_id %}
+    <a href="/article/{{ next_id }}{{ tier_param }}">Next →</a>
+    {% else %}
+    <span></span>
+    {% endif %}
+</nav>
 {% endblock %}

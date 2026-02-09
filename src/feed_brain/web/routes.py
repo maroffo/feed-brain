@@ -64,8 +64,8 @@ async def feed_list(
 
 
 @router.get("/article/{article_id}", response_class=HTMLResponse)
-async def article_detail(request: Request, article_id: int):
-    """Article detail page with full content."""
+async def article_detail(request: Request, article_id: int, tier: str | None = Query(None)):
+    """Article detail page with full content and next/prev navigation."""
     session_factory = get_session_factory()
     async with session_factory() as session:
         result = await session.execute(
@@ -76,10 +76,35 @@ async def article_detail(request: Request, article_id: int):
             raise HTTPException(status_code=404, detail="Article not found")
         view = _article_to_view(article)
 
+        # Find prev/next articles in the same tier context
+        base_query = select(Article.id).order_by(Article.fetched_at.desc())
+        if tier:
+            base_query = base_query.where(Article.tier == tier)
+
+        ids_result = await session.execute(base_query)
+        article_ids = [row[0] for row in ids_result.all()]
+
+        prev_id = None
+        next_id = None
+        if article_id in article_ids:
+            idx = article_ids.index(article_id)
+            if idx > 0:
+                prev_id = article_ids[idx - 1]
+            if idx < len(article_ids) - 1:
+                next_id = article_ids[idx + 1]
+
+    tier_param = f"?tier={tier}" if tier else ""
     templates = request.app.state.templates
     return templates.TemplateResponse(
         "article.html",
-        {"request": request, "article": view},
+        {
+            "request": request,
+            "article": view,
+            "prev_id": prev_id,
+            "next_id": next_id,
+            "tier_filter": tier,
+            "tier_param": tier_param,
+        },
     )
 
 
@@ -218,4 +243,6 @@ async def _render_feed_list(request: Request) -> HTMLResponse:
         sources = result.scalars().all()
 
     templates = request.app.state.templates
-    return templates.TemplateResponse("feeds.html", {"request": request, "sources": sources})
+    return templates.TemplateResponse(
+        "partials/feed_list_table.html", {"request": request, "sources": sources}
+    )

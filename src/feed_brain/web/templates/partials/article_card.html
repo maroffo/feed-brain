@@ -11,7 +11,7 @@
             <span class="source">{{ article.source_name }}</span>
             {% endif %}
         </div>
-        <h3><a href="/article/{{ article.id }}">{{ article.title }}</a></h3>
+        <h3><a href="/article/{{ article.id }}{{ '?tier=' + tier_filter if tier_filter else '' }}">{{ article.title }}</a></h3>
     </header>
     {% if article.summary %}
     <p class="summary">{{ article.summary }}</p>

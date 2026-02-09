@@ -4,21 +4,24 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}feed-brain{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
     <link rel="stylesheet" href="/static/css/style.css">
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
 </head>
 <body>
-    <header class="container">
-        <nav>
+    <header class="container-fluid">
+        <nav class="container">
             <ul>
-                <li><a href="/"><strong>feed-brain</strong></a></li>
+                <li><a href="/" class="brand"><strong>feed-brain</strong></a></li>
             </ul>
             <ul>
-                <li><a href="/">Feed</a></li>
-                <li><a href="/feeds">Sources</a></li>
+                <li><a href="/" class="nav-link">Feed</a></li>
+                <li><a href="/feeds" class="nav-link">Sources</a></li>
                 <li>
-                    <button hx-post="/fetch" hx-swap="none" hx-indicator="#fetch-spinner" class="outline secondary btn-sm">
+                    <button hx-post="/fetch" hx-swap="none" hx-indicator="#fetch-spinner" class="outline contrast btn-sm">
                         Refresh
                     </button>
                     <span id="fetch-spinner" class="htmx-indicator">Fetching...</span>
