@@ -2,6 +2,7 @@
 # ABOUTME: Scores articles by relevance tier, assigns category, generates summary.
 
 import json
+import re
 from datetime import UTC, datetime
 
 import structlog
@@ -96,7 +97,10 @@ async def classify_article(
             messages=[{"role": "user", "content": user_message}],
         )
 
-        text = response.content[0].text.strip()
+        text = response.content[0].text.strip() if response.content else ""
+        log.debug("classifier_raw_response", text=text[:200], stop_reason=response.stop_reason)
+        # Strip markdown code fences if present (e.g. ```json ... ```)
+        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
         data = json.loads(text)
         result = ClassificationResult(
             tier=Tier(data["tier"]),
