@@ -31,7 +31,7 @@
     {% endif %}
 
     <div class="article-content">
-        {{ article.content | default("No content extracted.") }}
+        {{ article.content | default("No content extracted.") | safe }}
     </div>
 
     <footer>
