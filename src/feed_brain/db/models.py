@@ -46,6 +46,8 @@ class Article(Base):
     category: Mapped[str | None] = mapped_column(String(50))
     reason: Mapped[str | None] = mapped_column(Text)
     confidence: Mapped[float | None] = mapped_column(Float)
+    money_quote: Mapped[str | None] = mapped_column(Text)
+    actionables: Mapped[str | None] = mapped_column(Text)  # JSON array
 
     # Feedback
     feedback: Mapped[str | None] = mapped_column(String(20))

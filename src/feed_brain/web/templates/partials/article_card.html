@@ -1,22 +1,26 @@
-<article class="card" id="article-{{ article.id }}">
-    <header>
-        <div class="card-meta">
-            {% if article.tier %}
-            <span class="badge tier-{{ article.tier }}">{{ article.tier | tier_label }}</span>
-            {% endif %}
-            {% if article.category %}
-            <span class="badge category">{{ article.category | category_label }}</span>
-            {% endif %}
-            {% if article.source_name %}
-            <span class="source">{{ article.source_name }}</span>
-            {% endif %}
-        </div>
-        <h3><a href="/article/{{ article.id }}{{ '?tier=' + tier_filter if tier_filter else '' }}">{{ article.title }}</a></h3>
-    </header>
-    {% if article.summary %}
-    <p class="summary">{{ article.summary }}</p>
-    {% endif %}
-    <footer>
+<article class="card tier-border-{{ article.tier }}" id="article-{{ article.id }}">
+    <div class="card-content">
+        <header>
+            <div class="card-meta">
+                {% if article.tier %}
+                <span class="badge tier-{{ article.tier }}">{{ article.tier | tier_label }}</span>
+                {% endif %}
+                {% if article.category %}
+                <span class="badge category">{{ article.category | category_label }}</span>
+                {% endif %}
+                {% if article.source_name %}
+                <span class="source">{{ article.source_name }}</span>
+                {% endif %}
+                <span class="date">{{ article.fetched_at.strftime('%d %b %H:%M') }}</span>
+            </div>
+            <h3><a href="/article/{{ article.id }}{{ '?tier=' + tier_filter if tier_filter else '' }}">{{ article.title }}</a></h3>
+        </header>
+        {% if article.summary %}
+        <p class="summary">{{ article.summary }}</p>
+        {% endif %}
+    </div>
+    
+    <div class="card-actions">
         <div class="feedback-buttons" id="feedback-{{ article.id }}">
             {% if article.feedback == "approved" %}
             <span class="feedback-done">Clipping created</span>
@@ -26,12 +30,18 @@
             <button hx-post="/article/{{ article.id }}/feedback?feedback=approved"
                     hx-target="#feedback-{{ article.id }}"
                     hx-swap="innerHTML"
-                    class="btn-sm outline">👍</button>
+                    class="btn-action btn-approve"
+                    title="Approve">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 11v 8a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1v-7a1 1 0 0 1 1 -1h3a4 4 0 0 0 4 -4v-1a2 2 0 0 1 4 0v5h3a2 2 0 0 1 2 2l-1 5a2 3 0 0 1 -2 2h-7a3 3 0 0 1 -3 -3"></path></svg>
+            </button>
             <button hx-post="/article/{{ article.id }}/feedback?feedback=skipped"
                     hx-target="#feedback-{{ article.id }}"
                     hx-swap="innerHTML"
-                    class="btn-sm outline secondary">👎</button>
+                    class="btn-action btn-skip"
+                    title="Skip">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 13v-8a1 1 0 0 0 -1 -1h-2a1 1 0 0 0 -1 1v7a1 1 0 0 0 1 1h3a4 4 0 0 1 4 4v1a2 2 0 0 0 4 0v-5h3a2 2 0 0 0 2 -2l-1 -5a2 3 0 0 0 -2 -2h-7a3 3 0 0 0 -3 3"></path></svg>
+            </button>
             {% endif %}
         </div>
-    </footer>
+    </div>
 </article>

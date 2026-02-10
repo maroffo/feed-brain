@@ -68,7 +68,17 @@ Classify articles based on the reader's interest profile.
 ## Output Format
 Respond with ONLY a JSON object (no markdown, no explanation):
 {"tier": "high|medium|low", "category": "<category>", "summary": "<2-3 sentence summary>", \
-"reason": "<why this tier>", "confidence": 0.0-1.0}
+"reason": "<why this tier>", "confidence": 0.0-1.0, \
+"money_quote": "<most impactful verbatim quote from the article, 1-2 sentences>", \
+"actionables": ["<concrete actionable takeaway 1>", "<actionable 2>", ...]}
+
+Rules for money_quote: pick the single most memorable, insightful, or provocative sentence \
+from the article text. Must be a direct quote, not a paraphrase. If no standout quote exists, \
+use the most informative sentence.
+
+Rules for actionables: 2-4 concrete things the reader can do, try, or apply based on the \
+article. Use imperative form ("Try X", "Use Y for Z", "Consider switching to..."). \
+If the article is purely informational with no actionable content, return an empty array.
 """
 
 
@@ -92,7 +102,7 @@ async def classify_article(
     try:
         response = await client.messages.create(
             model=settings.classifier_model,
-            max_tokens=500,
+            max_tokens=1000,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
         )
@@ -107,6 +117,8 @@ async def classify_article(
             category=Category(data["category"]),
             summary=data["summary"],
             reason=data["reason"],
+            money_quote=data.get("money_quote", ""),
+            actionables=data.get("actionables", []),
             confidence=float(data["confidence"]),
         )
         log.info(
@@ -156,6 +168,8 @@ async def classify_unclassified() -> int:
                 article.category = classification.category.value
                 article.reason = classification.reason
                 article.confidence = classification.confidence
+                article.money_quote = classification.money_quote
+                article.actionables = json.dumps(classification.actionables)
                 article.classified_at = datetime.now(UTC)
                 classified += 1
 

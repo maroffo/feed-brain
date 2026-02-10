@@ -21,17 +21,61 @@
         <p><a href="{{ article.url }}" target="_blank" rel="noopener">Original article ↗</a></p>
     </header>
 
+    <nav class="article-actions-bar">
+        <div class="feedback-buttons feedback-group-{{ article.id }}">
+            {% if article.feedback == "approved" %}
+            <span class="feedback-done">Clipping created</span>
+            {% elif article.feedback == "skipped" %}
+            <span class="feedback-done">Skipped</span>
+            {% else %}
+            <button hx-post="/article/{{ article.id }}/feedback?feedback=approved"
+                    hx-target=".feedback-group-{{ article.id }}"
+                    hx-swap="outerHTML"
+                    class="btn-sm outline contrast">👍 Approve</button>
+            <button hx-post="/article/{{ article.id }}/feedback?feedback=skipped"
+                    hx-target=".feedback-group-{{ article.id }}"
+                    hx-swap="outerHTML"
+                    class="btn-sm outline contrast">👎 Skip</button>
+            {% endif %}
+        </div>
+        <div class="nav-links">
+            {% if prev_id %}
+            <a href="/article/{{ prev_id }}{{ tier_param }}" role="button" class="outline contrast btn-sm">← Prev</a>
+            {% endif %}
+            <a href="/{{ '?tier=' + tier_filter if tier_filter else '' }}" role="button" class="outline contrast btn-sm">Feed</a>
+            {% if next_id %}
+            <a href="/article/{{ next_id }}{{ tier_param }}" role="button" class="outline contrast btn-sm">Next →</a>
+            {% endif %}
+        </div>
+    </nav>
+
     {% if article.summary %}
     <aside class="ai-analysis">
         <div class="summary-section">
             <h6 class="ai-label">AI Summary</h6>
             <p>{{ article.summary }}</p>
         </div>
-        {% if article.reason %}
-        <div class="reason-section">
-            <h6 class="ai-label">Analysis & Reasoning</h6>
-            <p class="reason-text">{{ article.reason }}</p>
+        {% if article.money_quote %}
+        <div class="quote-section">
+            <h6 class="ai-label">Money Quote</h6>
+            <blockquote class="money-quote">"{{ article.money_quote }}"</blockquote>
         </div>
+        {% endif %}
+        {% if article.actionables %}
+        <div class="actionables-section">
+            <h6 class="ai-label">Actionable Takeaways</h6>
+            <ul class="actionables-list">
+                {% for item in article.actionables %}
+                <li>{{ item }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+        {% if article.reason %}
+        <details class="reason-section">
+            <summary class="ai-label">Why this tier?</summary>
+            <p class="reason-text">{{ article.reason }}</p>
+        </details>
         {% endif %}
     </aside>
     {% endif %}
@@ -40,37 +84,32 @@
         {{ article.content | default("No content extracted.") | safe }}
     </div>
 
-    <footer>
-        <div class="feedback-buttons" id="feedback-{{ article.id }}">
+    <footer class="article-actions-bar">
+        <div class="feedback-buttons feedback-group-{{ article.id }}">
             {% if article.feedback == "approved" %}
             <span class="feedback-done">Clipping created</span>
             {% elif article.feedback == "skipped" %}
             <span class="feedback-done">Skipped</span>
             {% else %}
             <button hx-post="/article/{{ article.id }}/feedback?feedback=approved"
-                    hx-target="#feedback-{{ article.id }}"
-                    hx-swap="innerHTML"
-                    class="btn-sm outline">👍 Approve</button>
+                    hx-target=".feedback-group-{{ article.id }}"
+                    hx-swap="outerHTML"
+                    class="btn-sm outline contrast">👍 Approve</button>
             <button hx-post="/article/{{ article.id }}/feedback?feedback=skipped"
-                    hx-target="#feedback-{{ article.id }}"
-                    hx-swap="innerHTML"
-                    class="btn-sm outline secondary">👎 Skip</button>
+                    hx-target=".feedback-group-{{ article.id }}"
+                    hx-swap="outerHTML"
+                    class="btn-sm outline contrast">👎 Skip</button>
+            {% endif %}
+        </div>
+        <div class="nav-links">
+            {% if prev_id %}
+            <a href="/article/{{ prev_id }}{{ tier_param }}" role="button" class="outline contrast btn-sm">← Prev</a>
+            {% endif %}
+            <a href="/{{ '?tier=' + tier_filter if tier_filter else '' }}" role="button" class="outline contrast btn-sm">Feed</a>
+            {% if next_id %}
+            <a href="/article/{{ next_id }}{{ tier_param }}" role="button" class="outline contrast btn-sm">Next →</a>
             {% endif %}
         </div>
     </footer>
 </article>
-
-<nav class="article-nav">
-    {% if prev_id %}
-    <a href="/article/{{ prev_id }}{{ tier_param }}">← Previous</a>
-    {% else %}
-    <span></span>
-    {% endif %}
-    <a href="/{{ '?tier=' + tier_filter if tier_filter else '' }}">Back to feed</a>
-    {% if next_id %}
-    <a href="/article/{{ next_id }}{{ tier_param }}">Next →</a>
-    {% else %}
-    <span></span>
-    {% endif %}
-</nav>
 {% endblock %}

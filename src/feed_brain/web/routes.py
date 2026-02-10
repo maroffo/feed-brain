@@ -1,6 +1,8 @@
 # ABOUTME: FastAPI route handlers for the feed-brain web UI.
 # ABOUTME: Serves feed list, article detail, feedback, fetch trigger, and feed management.
 
+import json
+
 import structlog
 from fastapi import APIRouter, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse
@@ -30,6 +32,8 @@ def _article_to_view(article: Article) -> ArticleView:
         category=article.category,
         reason=article.reason,
         confidence=article.confidence,
+        money_quote=article.money_quote,
+        actionables=json.loads(article.actionables) if article.actionables else [],
         feedback=article.feedback,
         clipping_created=article.clipping_created,
         fetched_at=article.fetched_at,
@@ -177,8 +181,10 @@ async def add_feed(request: Request, name: str = Form(...), url: str = Form(...)
     """Add a new RSS feed source."""
     session_factory = get_session_factory()
     async with session_factory() as session:
-        # Check for duplicate URL
-        existing = await session.execute(select(FeedSource.id).where(FeedSource.url == url))
+        # Check for duplicate URL among active feeds
+        existing = await session.execute(
+            select(FeedSource).where(FeedSource.url == url, FeedSource.active.is_(True))
+        )
         if existing.scalar_one_or_none() is not None:
             return HTMLResponse("<p>Feed URL already exists.</p>", status_code=409)
 
@@ -191,7 +197,7 @@ async def add_feed(request: Request, name: str = Form(...), url: str = Form(...)
 
 @router.delete("/feeds/{feed_id}", response_class=HTMLResponse)
 async def delete_feed(feed_id: int):
-    """Remove a feed source (soft delete via active=False)."""
+    """Remove a feed source (hard delete, nullifies article references)."""
     session_factory = get_session_factory()
     async with session_factory() as session:
         result = await session.execute(select(FeedSource).where(FeedSource.id == feed_id))
@@ -199,10 +205,41 @@ async def delete_feed(feed_id: int):
         if not source:
             raise HTTPException(status_code=404, detail="Feed not found")
 
-        source.active = False
+        # Nullify article references before deleting
+        await session.execute(
+            Article.__table__.update().where(Article.source_id == feed_id).values(source_id=None)
+        )
+        await session.delete(source)
         await session.commit()
 
     return HTMLResponse("")
+
+
+@router.put("/feeds/{feed_id}", response_class=HTMLResponse)
+async def edit_feed(request: Request, feed_id: int, name: str = Form(...), url: str = Form(...)):  # noqa: ARG001
+    """Update an existing feed source."""
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        result = await session.execute(select(FeedSource).where(FeedSource.id == feed_id))
+        source = result.scalar_one_or_none()
+        if not source:
+            raise HTTPException(status_code=404, detail="Feed not found")
+
+        # Check URL uniqueness (excluding this feed)
+        if url != source.url:
+            dup = await session.execute(
+                select(FeedSource.id).where(
+                    FeedSource.url == url, FeedSource.id != feed_id, FeedSource.active.is_(True)
+                )
+            )
+            if dup.scalar_one_or_none() is not None:
+                return HTMLResponse("<p>Feed URL already exists.</p>", status_code=409)
+
+        source.name = name
+        source.url = url
+        await session.commit()
+
+    return await _render_feed_list(request)
 
 
 @router.post("/feeds/import", response_class=HTMLResponse)

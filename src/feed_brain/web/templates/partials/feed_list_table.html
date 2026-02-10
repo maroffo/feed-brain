@@ -11,19 +11,54 @@
         <tbody>
             {% for source in sources %}
             <tr id="feed-row-{{ source.id }}">
-                <td>{{ source.name }}</td>
-                <td><small>{{ source.url | truncate(50) }}</small></td>
                 <td>
-                    <button hx-delete="/feeds/{{ source.id }}"
-                            hx-target="#feed-row-{{ source.id }}"
-                            hx-swap="outerHTML"
-                            class="btn-sm outline secondary"
-                            hx-confirm="Remove {{ source.name }}?">Remove</button>
+                    <span class="feed-display-{{ source.id }}">{{ source.name }}</span>
+                    <input type="text" class="feed-edit-{{ source.id }} feed-edit-field" name="name"
+                           value="{{ source.name }}" style="display:none" form="edit-form-{{ source.id }}">
+                </td>
+                <td>
+                    <small class="feed-display-{{ source.id }}">{{ source.url | truncate(50) }}</small>
+                    <input type="url" class="feed-edit-{{ source.id }} feed-edit-field" name="url"
+                           value="{{ source.url }}" style="display:none" form="edit-form-{{ source.id }}">
+                </td>
+                <td class="feed-actions">
+                    <form id="edit-form-{{ source.id }}"
+                          hx-put="/feeds/{{ source.id }}"
+                          hx-target="#feed-list"
+                          hx-swap="innerHTML"
+                          style="display:none"></form>
+                    <span class="feed-display-{{ source.id }} feed-btn-group">
+                        <button type="button"
+                                class="btn-sm outline"
+                                onclick="toggleEdit({{ source.id }})">Edit</button>
+                        <button hx-delete="/feeds/{{ source.id }}"
+                                hx-target="#feed-row-{{ source.id }}"
+                                hx-swap="outerHTML"
+                                class="btn-sm outline"
+                                hx-confirm="Remove {{ source.name }}?">Remove</button>
+                    </span>
+                    <span class="feed-edit-{{ source.id }} feed-btn-group" style="display:none">
+                        <button type="submit" form="edit-form-{{ source.id }}"
+                                class="btn-sm">Save</button>
+                        <button type="button"
+                                class="btn-sm outline"
+                                onclick="toggleEdit({{ source.id }})">Cancel</button>
+                    </span>
                 </td>
             </tr>
             {% endfor %}
         </tbody>
     </table>
+    <script>
+    function toggleEdit(id) {
+        document.querySelectorAll('.feed-display-' + id).forEach(el => {
+            el.style.display = el.style.display === 'none' ? '' : 'none';
+        });
+        document.querySelectorAll('.feed-edit-' + id).forEach(el => {
+            el.style.display = el.style.display === 'none' ? '' : 'none';
+        });
+    }
+    </script>
     {% else %}
     <p>No feeds configured. Add one above or import an OPML file.</p>
     {% endif %}

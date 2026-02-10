@@ -26,8 +26,32 @@ tags:
   - "feed-brain"
 ---
 
-{content}
+{ai_section}{content}
 """
+
+
+def _build_ai_section(article: Article) -> str:
+    """Build markdown AI analysis section from article fields."""
+    parts = []
+
+    if article.summary:
+        parts.append(f"## AI Summary\n\n{article.summary}")
+
+    if article.money_quote:
+        parts.append(f'## Money Quote\n\n> "{article.money_quote}"')
+
+    if article.actionables:
+        actionables = (
+            json.loads(article.actionables) if isinstance(article.actionables, str) else []
+        )
+        if actionables:
+            items = "\n".join(f"- {item}" for item in actionables)
+            parts.append(f"## Actionable Takeaways\n\n{items}")
+
+    if not parts:
+        return ""
+
+    return "\n\n".join(parts) + "\n\n---\n\n"
 
 
 def _sanitize_filename(title: str) -> str:
@@ -73,6 +97,7 @@ async def create_clipping(article: Article, clippings_dir: Path | None = None) -
         published=published,
         created=datetime.now(UTC).strftime("%Y-%m-%d"),
         summary=_yaml_str(article.summary or ""),
+        ai_section=_build_ai_section(article),
         content=article.content or "",
     )
 

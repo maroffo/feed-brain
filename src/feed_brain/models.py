@@ -38,6 +38,8 @@ class ClassificationResult(BaseModel):
     summary: str
     reason: str
     confidence: float
+    money_quote: str = ""
+    actionables: list[str] = []
 
 
 class FeedSourceCreate(BaseModel):
@@ -62,6 +64,8 @@ class ArticleView(BaseModel):
     category: Category | None
     reason: str | None
     confidence: float | None
+    money_quote: str | None
+    actionables: list[str]
     feedback: Feedback | None
     clipping_created: bool
     fetched_at: datetime
