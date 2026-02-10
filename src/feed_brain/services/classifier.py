@@ -118,7 +118,7 @@ async def classify_article(
             summary=data["summary"],
             reason=data["reason"],
             money_quote=data.get("money_quote", ""),
-            actionables=data.get("actionables", []),
+            actionables=data.get("actionables") or [],
             confidence=float(data["confidence"]),
         )
         log.info(

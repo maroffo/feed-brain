@@ -177,7 +177,7 @@ async def feeds_page(request: Request):
 
 
 @router.post("/feeds", response_class=HTMLResponse)
-async def add_feed(request: Request, name: str = Form(...), url: str = Form(...)):  # noqa: ARG001
+async def add_feed(request: Request, name: str = Form(...), url: str = Form(...)):
     """Add a new RSS feed source."""
     session_factory = get_session_factory()
     async with session_factory() as session:
@@ -216,7 +216,7 @@ async def delete_feed(feed_id: int):
 
 
 @router.put("/feeds/{feed_id}", response_class=HTMLResponse)
-async def edit_feed(request: Request, feed_id: int, name: str = Form(...), url: str = Form(...)):  # noqa: ARG001
+async def edit_feed(request: Request, feed_id: int, name: str = Form(...), url: str = Form(...)):
     """Update an existing feed source."""
     session_factory = get_session_factory()
     async with session_factory() as session:
