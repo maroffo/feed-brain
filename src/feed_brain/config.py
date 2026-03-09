@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     # Anthropic (deep analysis)
     anthropic_api_key: SecretStr | None = None
-    analyzer_model: str = "claude-sonnet-4-5-20250514"
+    analyzer_model: str = "claude-sonnet-4-6"
 
     # Ollama (triage)
     ollama_model: str = "llama3.2:3b"
