@@ -1,12 +1,10 @@
-# ABOUTME: Tests for RSS feed fetching and article storage.
+# ABOUTME: Tests for RSS feed fetching and article extraction.
 # ABOUTME: Uses mock feeds and HTTP responses to verify fetch pipeline.
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from sqlalchemy import select
-
-from feed_brain.db.models import Article, FeedSource
+from feed_brain.db.models import FeedSource
 from feed_brain.services.fetcher import _fetch_single_feed
 
 
@@ -54,12 +52,9 @@ class MockSettings:
     article_max_age_hours = 48
 
 
-async def test_fetch_stores_new_article(db_session):
-    """New articles are extracted and stored in the database."""
-    source = FeedSource(name="Test", url="https://test.com/feed.xml")
-    db_session.add(source)
-    await db_session.flush()
-
+async def test_fetch_extracts_new_article():
+    """New articles are extracted and returned as FetchedArticle."""
+    source = FeedSource(id=1, name="Test", url="https://test.com/feed.xml")
     entries = [_make_feed_entry()]
     mock_feed = _make_parsed_feed(entries)
 
@@ -77,32 +72,18 @@ async def test_fetch_stores_new_article(db_session):
             return_value="Extracted content here.",
         ),
     ):
-        count = await _fetch_single_feed(db_session, source, MockSettings())
+        result = await _fetch_single_feed(source, MockSettings(), existing_urls=set())
 
-    assert count == 1
-    result = await db_session.execute(select(Article))
-    article = result.scalar_one()
-    assert article.title == "Test Post"
-    assert article.content == "Extracted content here."
-    assert article.source_id == source.id
-    assert article.status == "new"
+    assert result.error is None
+    assert len(result.articles) == 1
+    assert result.articles[0].title == "Test Post"
+    assert result.articles[0].content == "Extracted content here."
+    assert result.articles[0].source_id == 1
 
 
-async def test_fetch_skips_existing_url(db_session):
+async def test_fetch_skips_existing_url():
     """Articles with URLs already in DB are skipped."""
-    source = FeedSource(name="Test", url="https://test.com/feed.xml")
-    db_session.add(source)
-    await db_session.flush()
-
-    existing = Article(
-        url="https://example.com/post-1",
-        title="Old",
-        source_id=source.id,
-        fetched_at=datetime.now(UTC),
-    )
-    db_session.add(existing)
-    await db_session.flush()
-
+    source = FeedSource(id=1, name="Test", url="https://test.com/feed.xml")
     entries = [_make_feed_entry(url="https://example.com/post-1")]
     mock_feed = _make_parsed_feed(entries)
 
@@ -115,17 +96,17 @@ async def test_fetch_skips_existing_url(db_session):
         patch("feed_brain.services.fetcher.httpx.AsyncClient", return_value=mock_client),
         patch("feed_brain.services.fetcher.feedparser.parse", return_value=mock_feed),
     ):
-        count = await _fetch_single_feed(db_session, source, MockSettings())
+        result = await _fetch_single_feed(
+            source, MockSettings(), existing_urls={"https://example.com/post-1"}
+        )
 
-    assert count == 0
+    assert result.error is None
+    assert len(result.articles) == 0
 
 
-async def test_fetch_handles_bozo_feed(db_session):
-    """Malformed feeds with no entries return 0 without crashing."""
-    source = FeedSource(name="Bad", url="https://bad.com/feed.xml")
-    db_session.add(source)
-    await db_session.flush()
-
+async def test_fetch_handles_bozo_feed():
+    """Malformed feeds with no entries return error."""
+    source = FeedSource(id=1, name="Bad", url="https://bad.com/feed.xml")
     mock_feed = _make_parsed_feed([])
     mock_feed.bozo = True
     mock_feed.bozo_exception = Exception("bad XML")
@@ -139,6 +120,7 @@ async def test_fetch_handles_bozo_feed(db_session):
         patch("feed_brain.services.fetcher.httpx.AsyncClient", return_value=mock_client),
         patch("feed_brain.services.fetcher.feedparser.parse", return_value=mock_feed),
     ):
-        count = await _fetch_single_feed(db_session, source, MockSettings())
+        result = await _fetch_single_feed(source, MockSettings(), existing_urls=set())
 
-    assert count == 0
+    assert result.error is not None
+    assert len(result.articles) == 0

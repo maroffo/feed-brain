@@ -2,7 +2,7 @@
 # ABOUTME: Manages SQLAlchemy async engine lifecycle, table creation, and schema migration.
 
 import structlog
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from feed_brain.config import get_settings
@@ -14,12 +14,21 @@ _engine = None
 _session_factory = None
 
 
+def _set_sqlite_pragmas(dbapi_conn, _connection_record):
+    """Enable WAL mode and busy timeout for concurrent access."""
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.close()
+
+
 def get_engine():
     """Get or create the async engine."""
     global _engine
     if _engine is None:
         settings = get_settings()
         _engine = create_async_engine(settings.database_url, echo=False)
+        event.listen(_engine.sync_engine, "connect", _set_sqlite_pragmas)
     return _engine
 
 
