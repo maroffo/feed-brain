@@ -58,15 +58,15 @@ class FeedSourceCreate(BaseModel):
     url: str
 
 
-# Maps categories to vault subfolder paths
+# Maps categories to Second Brain topic filenames (without .md extension)
 CATEGORY_VAULT_MAP: dict[Category, str] = {
-    Category.AI_AGENTS: "Resources/AI Agents",
-    Category.CLAUDE_CODE: "Resources/Claude Code",
-    Category.DEVELOPMENT: "Resources/Development",
-    Category.DEVOPS_CLOUD: "Resources/DevOps",
-    Category.ENGINEERING_MANAGEMENT: "Resources/Engineering Management",
-    Category.POLITICS_ECONOMICS: "Resources/Politics & Economics",
-    Category.MARKETING: "Resources/Marketing",
-    Category.MEDIA_CULTURE: "Resources/Media & Culture",
-    Category.HEALTH_SCIENCE: "Resources/Health & Science",
+    Category.AI_AGENTS: "Second Brain - AI Agents and Tools",
+    Category.CLAUDE_CODE: "Second Brain - Claude Code",
+    Category.DEVELOPMENT: "Second Brain - Development",
+    Category.DEVOPS_CLOUD: "Second Brain - DevOps and Cloud",
+    Category.ENGINEERING_MANAGEMENT: "Second Brain - Engineering Management",
+    Category.POLITICS_ECONOMICS: "Second Brain - Politics and Economics",
+    Category.MARKETING: "Second Brain - Marketing",
+    Category.MEDIA_CULTURE: "Second Brain - Media and Culture",
+    Category.HEALTH_SCIENCE: "Second Brain - Health and Science",
 }

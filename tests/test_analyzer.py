@@ -2,7 +2,7 @@
 # ABOUTME: Verifies analysis parsing, error handling, and output structure.
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from feed_brain.db.models import Article
 from feed_brain.services.analyzer import analyze_article
@@ -87,5 +87,9 @@ async def test_analyze_article_no_api_key():
         tier="high",
     )
 
-    result = await analyze_article(article, client=None)
+    mock_settings = MagicMock()
+    mock_settings.anthropic_api_key = None
+
+    with patch("feed_brain.services.analyzer.get_settings", return_value=mock_settings):
+        result = await analyze_article(article, client=None)
     assert result is None

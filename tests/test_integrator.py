@@ -1,104 +1,173 @@
 # ABOUTME: Tests for Second Brain integrator.
-# ABOUTME: Verifies note creation, filename sanitization, and deep section building.
+# ABOUTME: Verifies append-to-topic-file pattern, timeline logging, and entry formatting.
 
 from feed_brain.db.models import Article
-from feed_brain.services.integrator import _build_deep_section, _sanitize_filename, _write_note
+from feed_brain.services.integrator import (
+    _build_entry,
+    _build_timeline_entry,
+    _resolve_topic_file,
+    integrate_article,
+)
 
 
-def test_sanitize_filename():
-    """Filenames are cleaned of invalid characters."""
-    assert _sanitize_filename('Test: A "Great" Article?') == "Test A Great Article"
-    assert _sanitize_filename("Normal Title") == "Normal Title"
-    assert len(_sanitize_filename("x" * 300)) <= 200
+class MockSettings:
+    vault_path = None  # Set per test via tmp_path
 
 
-def test_write_note_creates_file(tmp_path):
-    """Article is written as a markdown note to the vault."""
+def test_resolve_topic_file_known_category(tmp_path):
+    """Known categories resolve to correct Second Brain topic file."""
+    name, path = _resolve_topic_file("ai_agents", tmp_path)
+    assert name == "Second Brain - AI Agents and Tools"
+    assert path.name == "Second Brain - AI Agents and Tools.md"
+    assert "Second Brain" in str(path.parent)
+
+
+def test_resolve_topic_file_unknown_category(tmp_path):
+    """Unknown categories fall back to Development."""
+    name, path = _resolve_topic_file("nonexistent", tmp_path)
+    assert name == "Second Brain - Development"
+
+
+def test_resolve_topic_file_none_category(tmp_path):
+    """None category falls back to Development."""
+    name, path = _resolve_topic_file(None, tmp_path)
+    assert name == "Second Brain - Development"
+
+
+def test_build_entry_basic():
+    """Entry uses what/why table format with source link."""
     article = Article(
         url="https://example.com/article",
         title="AI Agents Overview",
-        author="Jane Doe",
-        content="Full article content here.",
-        summary="Summary of AI agents article.",
+        summary="AI agents are transforming software development workflows.",
+        reason="Relevant to AI tooling interests.",
+    )
+    entry = _build_entry(article)
+    assert "### AI Agents Overview" in entry
+    assert "| **What** |" in entry
+    assert "| **Why** |" in entry
+    assert "https://example.com/article" in entry
+    assert "Source" in entry
+
+
+def test_build_entry_with_deep_analysis():
+    """Entry includes deep analysis extras when available."""
+    article = Article(
+        url="https://example.com/deep",
+        title="Deep Article",
+        summary="Summary here.",
+        reason="Why it matters.",
+        deep_summary="Detailed analysis of the topic with many nuances.",
+        deep_insights='["Insight one", "Insight two"]',
+        money_quote="The best code is no code.",
+        actionables='["Try X", "Use Y"]',
+    )
+    entry = _build_entry(article)
+    assert "The best code is no code." in entry
+    assert "Insight one" in entry
+    assert "Actionable:" in entry
+    assert "Try X" in entry
+
+
+def test_build_entry_prefers_deep_summary():
+    """Entry uses deep_summary over triage summary when available."""
+    article = Article(
+        url="https://example.com/deep",
+        title="Deep Article",
+        summary="Triage summary.",
+        reason="Why.",
+        deep_summary="Much more detailed deep analysis summary.",
+    )
+    entry = _build_entry(article)
+    assert "detailed deep analysis" in entry
+    assert "Triage summary" not in entry
+
+
+def test_build_timeline_entry():
+    """Timeline entry follows the standard format."""
+    article = Article(url="https://example.com/x", title="Test Article")
+    entry = _build_timeline_entry(article, "Second Brain - Development")
+    assert "| [Test Article] |" in entry
+    assert "Source: feed-brain" in entry
+    assert "-> Second Brain - Development.md" in entry
+
+
+def test_integrate_article_appends_to_topic_file(tmp_path):
+    """Article content is appended to the correct topic file."""
+    settings = MockSettings()
+    settings.vault_path = tmp_path
+
+    article = Article(
+        url="https://example.com/article",
+        title="AI Agents Overview",
+        summary="AI agents are transforming workflows in meaningful ways.",
+        reason="Relevant to AI tooling.",
         tier="high",
         category="ai_agents",
         confidence=0.95,
         status="analyzed",
     )
 
-    target = _write_note(article, tmp_path)
+    target = integrate_article(article, settings)
 
-    assert target is not None
-    files = list(tmp_path.rglob("*.md"))
-    assert len(files) == 1
-    content = files[0].read_text()
-    assert "AI Agents Overview" in content
-    assert "https://example.com/article" in content
-    assert "Summary of AI agents article." in content
-    assert "feed-brain" in content
+    assert target == "Second Brain - AI Agents and Tools"
+    topic_file = tmp_path / "Second Brain" / "Second Brain - AI Agents and Tools.md"
+    assert topic_file.exists()
+    content = topic_file.read_text()
+    assert "### AI Agents Overview" in content
+    assert "| **What** |" in content
 
 
-def test_write_note_creates_subdirectory(tmp_path):
-    """Category-based subdirectory is created automatically."""
+def test_integrate_article_logs_to_timeline(tmp_path):
+    """Integration creates a Timeline entry."""
+    settings = MockSettings()
+    settings.vault_path = tmp_path
+
     article = Article(
-        url="https://example.com/devops",
-        title="K8s Best Practices",
-        summary="Kubernetes tips.",
-        tier="high",
-        category="devops_cloud",
-        confidence=0.88,
-        status="analyzed",
-    )
-
-    target = _write_note(article, tmp_path)
-
-    assert target is not None
-    assert "Resources/DevOps" in target
-
-
-def test_write_note_skips_existing(tmp_path):
-    """Existing notes are not overwritten."""
-    article = Article(
-        url="https://example.com/dup",
-        title="Dup Article",
-        summary="Summary.",
+        url="https://example.com/timeline-test",
+        title="Timeline Test",
+        summary="Testing timeline logging for articles.",
+        reason="Test.",
         tier="high",
         category="development",
         confidence=0.9,
         status="analyzed",
     )
 
-    # Create directory and file first
-    target_dir = tmp_path / "Resources" / "Development"
-    target_dir.mkdir(parents=True)
-    (target_dir / "Dup Article.md").write_text("original content")
+    integrate_article(article, settings)
 
-    target = _write_note(article, tmp_path)
-    assert target is not None
-    assert (target_dir / "Dup Article.md").read_text() == "original content"
+    timeline = tmp_path / "Second Brain" / "Second Brain - Timeline.md"
+    assert timeline.exists()
+    content = timeline.read_text()
+    assert "Timeline Test" in content
+    assert "feed-brain" in content
+    assert "Second Brain - Development.md" in content
 
 
-def test_build_deep_section_with_all_fields():
-    """Deep section includes all analysis fields."""
-    article = Article(
-        url="https://example.com/deep",
-        title="Deep Article",
-        deep_summary="Detailed analysis of the topic.",
-        deep_insights='["Insight one", "Insight two"]',
-        money_quote="The best code is no code.",
-        actionables='["Try X", "Use Y"]',
+def test_integrate_article_appends_not_overwrites(tmp_path):
+    """Multiple articles append to the same topic file."""
+    settings = MockSettings()
+    settings.vault_path = tmp_path
+
+    article1 = Article(
+        url="https://example.com/first",
+        title="First Article",
+        summary="First article content for testing append behavior.",
+        reason="Test.",
+        category="development",
+    )
+    article2 = Article(
+        url="https://example.com/second",
+        title="Second Article",
+        summary="Second article content for testing append behavior.",
+        reason="Test.",
+        category="development",
     )
 
-    section = _build_deep_section(article)
-    assert "## Deep Analysis" in section
-    assert "Detailed analysis" in section
-    assert "Insight one" in section
-    assert "The best code is no code." in section
-    assert "Try X" in section
+    integrate_article(article1, settings)
+    integrate_article(article2, settings)
 
-
-def test_build_deep_section_empty():
-    """Empty deep section returns empty string."""
-    article = Article(url="https://example.com/empty", title="Empty")
-    section = _build_deep_section(article)
-    assert section == ""
+    topic_file = tmp_path / "Second Brain" / "Second Brain - Development.md"
+    content = topic_file.read_text()
+    assert "### First Article" in content
+    assert "### Second Article" in content

@@ -73,28 +73,28 @@ async def _run_analyze() -> None:
         await _shutdown()
 
 
-def cmd_integrate(args: argparse.Namespace) -> None:
-    """Push articles to Second Brain."""
-    asyncio.run(_run_integrate(args.auto))
+def cmd_integrate(_args: argparse.Namespace) -> None:
+    """Push high-tier articles to Second Brain."""
+    asyncio.run(_run_integrate())
 
 
-async def _run_integrate(auto: bool) -> None:
+async def _run_integrate() -> None:
     await _init()
     try:
         from feed_brain.services.integrator import integrate_articles
 
-        integrated = await integrate_articles(auto=auto)
+        integrated = await integrate_articles()
         log.info("integrate_done", integrated=integrated)
     finally:
         await _shutdown()
 
 
-def cmd_run(args: argparse.Namespace) -> None:
+def cmd_run(_args: argparse.Namespace) -> None:
     """Full pipeline: fetch → triage → analyze → integrate."""
-    asyncio.run(_run_pipeline(args.auto))
+    asyncio.run(_run_pipeline())
 
 
-async def _run_pipeline(auto: bool) -> None:
+async def _run_pipeline() -> None:
     await _init()
     try:
         from feed_brain.services.analyzer import analyze_high_tier
@@ -111,7 +111,7 @@ async def _run_pipeline(auto: bool) -> None:
         analyzed = await analyze_high_tier()
         log.info("pipeline_analyze_done", analyzed=analyzed)
 
-        integrated = await integrate_articles(auto=auto)
+        integrated = await integrate_articles()
         log.info("pipeline_integrate_done", integrated=integrated)
     finally:
         await _shutdown()
@@ -210,12 +210,10 @@ def main() -> None:
     subparsers.add_parser("analyze", help="Deep analysis on high-tier articles")
 
     # integrate
-    integrate_parser = subparsers.add_parser("integrate", help="Push articles to Second Brain")
-    integrate_parser.add_argument("--auto", action="store_true", help="Skip interactive prompts")
+    subparsers.add_parser("integrate", help="Push high-tier articles to Second Brain")
 
     # run
-    run_parser = subparsers.add_parser("run", help="Full pipeline: fetch→triage→analyze→integrate")
-    run_parser.add_argument("--auto", action="store_true", help="Skip interactive prompts")
+    subparsers.add_parser("run", help="Full pipeline: fetch→triage→analyze→integrate")
 
     # list
     list_parser = subparsers.add_parser("list", help="List recent articles")

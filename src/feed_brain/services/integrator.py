@@ -1,5 +1,5 @@
-# ABOUTME: Second Brain integrator that writes articles to Obsidian vault.
-# ABOUTME: Routes articles to category folders, handles auto/interactive/skip logic.
+# ABOUTME: Second Brain integrator that appends articles to centralized vault topic files.
+# ABOUTME: Uses what/why table format, logs to Timeline, enables blog-writer and knowledge-sync signals.
 
 import json
 from datetime import UTC, datetime
@@ -8,7 +8,7 @@ from pathlib import Path
 import structlog
 from sqlalchemy import select
 
-from feed_brain.config import get_settings
+from feed_brain.config import Settings, get_settings
 from feed_brain.db.models import Article
 from feed_brain.db.session import get_session_factory
 from feed_brain.models import (
@@ -20,132 +20,141 @@ from feed_brain.models import (
 
 log = structlog.get_logger()
 
-NOTE_TEMPLATE = """\
----
-title: {title}
-source: "{url}"
-author: "{author}"
-published: {published}
-created: {created}
-tier: {tier}
-category: {category}
-confidence: {confidence}
-tags:
-  - feed-brain
-  - {category}
----
-
-## Summary
-
-{summary}
-{deep_section}
----
-
-> Source: [{title}]({url})
-"""
+TIMELINE_FILE = "Second Brain - Timeline"
+SECOND_BRAIN_DIR = "Second Brain"
 
 
-def _build_deep_section(article: Article) -> str:
-    """Build the deep analysis section if available."""
-    parts = []
+def _resolve_topic_file(category: str | None, vault_path: Path) -> tuple[str, Path]:
+    """Resolve the topic filename and full path for a category.
 
-    if article.deep_summary:
-        parts.append(f"## Deep Analysis\n\n{article.deep_summary}")
+    Returns (topic_filename, full_path) tuple.
+    """
+    try:
+        cat = Category(category) if category else Category.DEVELOPMENT
+    except ValueError:
+        cat = Category.DEVELOPMENT
+
+    topic_name = CATEGORY_VAULT_MAP.get(cat, "Second Brain - Development")
+    topic_dir = vault_path / SECOND_BRAIN_DIR
+    topic_dir.mkdir(parents=True, exist_ok=True)
+    return topic_name, topic_dir / f"{topic_name}.md"
+
+
+def _build_entry(article: Article) -> str:
+    """Build a Second Brain entry in the what/why table format.
+
+    Matches the content template used by process-clippings and newsletter-digest.
+    """
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
+    title = article.title or "Untitled"
+
+    # Use deep_summary if available (high-tier analyzed), otherwise triage summary
+    description = article.deep_summary or article.summary or "No summary available."
+    # Keep description concise: first 2 sentences max
+    sentences = description.replace("\n", " ").split(". ")
+    brief = ". ".join(sentences[:2]).strip()
+    if not brief.endswith("."):
+        brief += "."
+
+    # What: core content. Why: relevance/benefit.
+    what = brief
+    why = article.reason or "Relevant to interests."
+
+    parts = [f"### {title}", ""]
+    parts.append(brief)
+    parts.append("")
+    parts.append("| Aspect | Detail |")
+    parts.append("|--------|--------|")
+    parts.append(f"| **What** | {what} |")
+    parts.append(f"| **Why** | {why} |")
+
+    # Add deep analysis extras if available
+    if article.money_quote:
+        parts.append("")
+        parts.append(f'> "{article.money_quote}"')
 
     if article.deep_insights:
         insights = (
             json.loads(article.deep_insights) if isinstance(article.deep_insights, str) else []
         )
         if insights:
-            items = "\n".join(f"- {item}" for item in insights)
-            parts.append(f"## Insights\n\n{items}")
-
-    if article.money_quote:
-        parts.append(f'## Money Quote\n\n> "{article.money_quote}"')
+            parts.append("")
+            for insight in insights[:3]:
+                parts.append(f"- {insight}")
 
     if article.actionables:
         actionables = (
             json.loads(article.actionables) if isinstance(article.actionables, str) else []
         )
         if actionables:
-            items = "\n".join(f"- {item}" for item in actionables)
-            parts.append(f"## Actionable Takeaways\n\n{items}")
+            parts.append("")
+            parts.append("**Actionable:**")
+            for action in actionables:
+                parts.append(f"- {action}")
 
-    if not parts:
-        return ""
+    parts.append("")
+    parts.append(f"- [Source]({article.url}) - {today}")
+    parts.append("")
 
-    return "\n\n" + "\n\n".join(parts) + "\n\n"
-
-
-def _sanitize_filename(title: str) -> str:
-    """Remove characters invalid in filenames."""
-    invalid = '<>:"/\\|?*'
-    result = title
-    for ch in invalid:
-        result = result.replace(ch, "")
-    return result.strip()[:200]
+    return "\n".join(parts)
 
 
-def _write_note(article: Article, vault_path: Path) -> str | None:
-    """Write a single article as a markdown note to the vault.
+def _build_timeline_entry(article: Article, topic_name: str) -> str:
+    """Build a Timeline log entry."""
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
+    title = article.title or "Untitled"
+    return f"- **{today}** | [{title}] | Source: feed-brain | -> {topic_name}.md"
 
-    Returns the file path relative to vault, or None on failure.
-    """
+
+def _append_to_file(filepath: Path, content: str) -> bool:
+    """Append content to a file, creating it if it doesn't exist."""
     try:
-        category = Category(article.category) if article.category else Category.DEVELOPMENT
-    except ValueError:
-        category = Category.DEVELOPMENT
-    subfolder = CATEGORY_VAULT_MAP.get(category, "Resources/Uncategorized")
-    target_dir = vault_path / subfolder
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    filename = _sanitize_filename(article.title) + ".md"
-    filepath = target_dir / filename
-
-    if filepath.exists():
-        log.warning("note_already_exists", path=str(filepath))
-        return str(filepath.relative_to(vault_path))
-
-    published = ""
-    if article.published_date:
-        published = article.published_date.strftime("%Y-%m-%d")
-
-    content = NOTE_TEMPLATE.format(
-        title=article.title.replace('"', '\\"'),
-        url=article.url,
-        author=article.author or "Unknown",
-        published=published,
-        created=datetime.now(UTC).strftime("%Y-%m-%d"),
-        tier=article.tier or "unknown",
-        category=article.category or "uncategorized",
-        confidence=article.confidence or 0.0,
-        summary=article.summary or "No summary available.",
-        deep_section=_build_deep_section(article),
-    )
-
-    try:
-        filepath.write_text(content, encoding="utf-8")
-        log.info("note_created", path=str(filepath))
-        return str(filepath.relative_to(vault_path))
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        with filepath.open("a", encoding="utf-8") as f:
+            f.write(content)
+        return True
     except OSError as e:
-        log.error("note_write_error", path=str(filepath), error=str(e))
+        log.error("file_append_error", path=str(filepath), error=str(e))
+        return False
+
+
+def integrate_article(article: Article, settings: Settings) -> str | None:
+    """Integrate a single article into the Second Brain vault.
+
+    Appends to the centralized topic file and logs to Timeline.
+    Returns the topic filename on success, None on failure.
+    """
+    vault_path = settings.vault_path
+    topic_name, topic_path = _resolve_topic_file(article.category, vault_path)
+
+    # Build and append the entry
+    entry = _build_entry(article)
+    if not _append_to_file(topic_path, entry):
         return None
 
+    # Log to Timeline
+    timeline_path = vault_path / SECOND_BRAIN_DIR / f"{TIMELINE_FILE}.md"
+    timeline_entry = _build_timeline_entry(article, topic_name)
+    _append_to_file(timeline_path, timeline_entry + "\n")
 
-async def integrate_articles(auto: bool = False) -> int:
-    """Integrate articles into the Second Brain vault.
+    log.info("article_integrated", title=article.title, target=topic_name)
+    return topic_name
 
-    If auto=True, integrates all articles above auto_threshold without prompting.
-    If auto=False, prompts for medium-confidence articles.
+
+async def integrate_articles() -> int:
+    """Integrate high-tier articles into the Second Brain vault.
+
+    Only integrates high-tier articles above auto_threshold confidence.
+    Medium and low-tier articles are skipped entirely.
 
     Returns the number of articles integrated.
     """
     settings = get_settings()
     session_factory = get_session_factory()
     integrated = 0
+    skipped = 0
 
     async with session_factory() as session:
-        # Get articles ready for integration (analyzed high-tier + triaged medium/low)
         result = await session.execute(
             select(Article).where(
                 Article.status.in_([ArticleStatus.ANALYZED, ArticleStatus.TRIAGED]),
@@ -159,39 +168,19 @@ async def integrate_articles(auto: bool = False) -> int:
             confidence = article.confidence or 0.0
             tier = article.tier
 
-            # Skip low-tier and below interactive threshold
-            if tier == Tier.LOW or confidence < settings.interactive_threshold:
+            # Only integrate high-tier with sufficient confidence
+            if tier != Tier.HIGH or confidence < settings.auto_threshold:
+                skipped += 1
                 continue
 
-            # Auto-integrate high confidence + high tier
-            if auto or (confidence >= settings.auto_threshold and tier == Tier.HIGH):
-                target = _write_note(article, settings.vault_path)
-                if target:
-                    article.integrated_at = datetime.now(UTC)
-                    article.integration_target = target
-                    article.status = ArticleStatus.INTEGRATED
-                    integrated += 1
-                continue
-
-            # Interactive: prompt for medium confidence or medium tier
-            print(f"\n{'=' * 60}")
-            print(f"  {article.title}")
-            print(f"  Tier: {tier} | Category: {article.category} | Confidence: {confidence:.2f}")
-            print(f"  {article.summary or 'No summary'}")
-            print(f"{'=' * 60}")
-
-            response = input("  Integrate? [y/n/q] ").strip().lower()
-            if response == "q":
-                break
-            if response == "y":
-                target = _write_note(article, settings.vault_path)
-                if target:
-                    article.integrated_at = datetime.now(UTC)
-                    article.integration_target = target
-                    article.status = ArticleStatus.INTEGRATED
-                    integrated += 1
+            target = integrate_article(article, settings)
+            if target:
+                article.integrated_at = datetime.now(UTC)
+                article.integration_target = target
+                article.status = ArticleStatus.INTEGRATED
+                integrated += 1
 
         await session.commit()
 
-    log.info("integration_complete", integrated=integrated, total=len(articles))
+    log.info("integration_complete", integrated=integrated, skipped=skipped, total=len(articles))
     return integrated

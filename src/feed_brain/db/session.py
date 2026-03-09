@@ -59,6 +59,8 @@ async def migrate_db() -> None:
         ("articles", "status", "TEXT DEFAULT 'new'"),
         ("articles", "deep_summary", "TEXT"),
         ("articles", "deep_insights", "TEXT"),
+        ("articles", "money_quote", "TEXT"),
+        ("articles", "actionables", "TEXT"),
         ("articles", "integrated_at", "DATETIME"),
         ("articles", "integration_target", "TEXT"),
     ]
