@@ -37,4 +37,5 @@ def sample_article() -> Article:
         title="Test Article",
         author="Test Author",
         content="This is test article content about AI agents and development.",
+        status="new",
     )

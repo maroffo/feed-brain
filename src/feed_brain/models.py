@@ -1,7 +1,6 @@
 # ABOUTME: Pydantic schemas for data validation and serialization.
-# ABOUTME: Defines classification output, article data, and feed source schemas.
+# ABOUTME: Defines triage output, deep analysis, category mapping, and article status.
 
-from datetime import datetime
 from enum import StrEnum
 
 from pydantic import BaseModel
@@ -25,21 +24,31 @@ class Category(StrEnum):
     HEALTH_SCIENCE = "health_science"
 
 
-class Feedback(StrEnum):
-    APPROVED = "approved"
-    SKIPPED = "skipped"
+class ArticleStatus(StrEnum):
+    NEW = "new"
+    TRIAGED = "triaged"
+    ANALYZED = "analyzed"
+    INTEGRATED = "integrated"
+    ERROR = "error"
 
 
-class ClassificationResult(BaseModel):
-    """Output from the Haiku classifier."""
+class TriageResult(BaseModel):
+    """Flat output from Ollama triage."""
 
     tier: Tier
     category: Category
+    confidence: float
     summary: str
     reason: str
-    confidence: float
-    money_quote: str = ""
-    actionables: list[str] = []
+
+
+class DeepAnalysis(BaseModel):
+    """Output from Anthropic deep analysis."""
+
+    summary: str
+    insights: list[str]
+    money_quote: str
+    actionables: list[str]
 
 
 class FeedSourceCreate(BaseModel):
@@ -49,24 +58,15 @@ class FeedSourceCreate(BaseModel):
     url: str
 
 
-class ArticleView(BaseModel):
-    """Article data for template rendering."""
-
-    id: int
-    url: str
-    title: str
-    author: str | None
-    source_name: str | None
-    content: str | None
-    published_date: datetime | None
-    summary: str | None
-    tier: Tier | None
-    category: Category | None
-    reason: str | None
-    confidence: float | None
-    money_quote: str | None
-    actionables: list[str]
-    feedback: Feedback | None
-    clipping_created: bool
-    fetched_at: datetime
-    classified_at: datetime | None
+# Maps categories to vault subfolder paths
+CATEGORY_VAULT_MAP: dict[Category, str] = {
+    Category.AI_AGENTS: "Resources/AI Agents",
+    Category.CLAUDE_CODE: "Resources/Claude Code",
+    Category.DEVELOPMENT: "Resources/Development",
+    Category.DEVOPS_CLOUD: "Resources/DevOps",
+    Category.ENGINEERING_MANAGEMENT: "Resources/Engineering Management",
+    Category.POLITICS_ECONOMICS: "Resources/Politics & Economics",
+    Category.MARKETING: "Resources/Marketing",
+    Category.MEDIA_CULTURE: "Resources/Media & Culture",
+    Category.HEALTH_SCIENCE: "Resources/Health & Science",
+}

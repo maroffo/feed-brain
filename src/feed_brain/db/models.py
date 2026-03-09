@@ -28,7 +28,7 @@ class Article(Base):
     __tablename__ = "articles"
     __table_args__ = (
         Index("ix_articles_tier", "tier"),
-        Index("ix_articles_feedback", "feedback"),
+        Index("ix_articles_status", "status"),
         Index("ix_articles_fetched_at", "fetched_at"),
     )
 
@@ -40,16 +40,27 @@ class Article(Base):
     content: Mapped[str | None] = mapped_column(Text)
     published_date: Mapped[datetime | None] = mapped_column(DateTime)
 
-    # AI classification
+    # Pipeline status
+    status: Mapped[str] = mapped_column(String(20), default="new")
+
+    # Triage (Ollama)
     summary: Mapped[str | None] = mapped_column(Text)
     tier: Mapped[str | None] = mapped_column(String(20))
     category: Mapped[str | None] = mapped_column(String(50))
     reason: Mapped[str | None] = mapped_column(Text)
     confidence: Mapped[float | None] = mapped_column(Float)
+
+    # Deep analysis (Anthropic)
+    deep_summary: Mapped[str | None] = mapped_column(Text)
+    deep_insights: Mapped[str | None] = mapped_column(Text)  # JSON array
     money_quote: Mapped[str | None] = mapped_column(Text)
     actionables: Mapped[str | None] = mapped_column(Text)  # JSON array
 
-    # Feedback
+    # Integration
+    integrated_at: Mapped[datetime | None] = mapped_column(DateTime)
+    integration_target: Mapped[str | None] = mapped_column(String(500))
+
+    # Legacy feedback (kept for data compat)
     feedback: Mapped[str | None] = mapped_column(String(20))
     clipping_created: Mapped[bool] = mapped_column(Boolean, default=False)
     feedback_at: Mapped[datetime | None] = mapped_column(DateTime)

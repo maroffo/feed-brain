@@ -17,9 +17,13 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Anthropic
+    # Anthropic (deep analysis)
     anthropic_api_key: SecretStr | None = None
-    classifier_model: str = "claude-haiku-4-5-20251001"
+    analyzer_model: str = "claude-sonnet-4-5-20250514"
+
+    # Ollama (triage)
+    ollama_model: str = "llama3.2:3b"
+    ollama_host: str = "http://localhost:11434"
 
     # Database
     db_path: Path = Path("./feed_brain.db")
@@ -30,16 +34,18 @@ class Settings(BaseSettings):
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15"
     )
-    max_articles_per_feed: int = 50
+    max_articles_per_feed: int = 15
+    article_max_age_hours: int = 48
+    fetch_concurrency: int = 10
 
-    # Obsidian integration
-    clippings_dir: Path = Path(
-        "/Users/maroffo/Library/Mobile Documents/iCloud~md~obsidian/Documents/Clippings"
+    # Second Brain (Obsidian vault)
+    vault_path: Path = Path(
+        "/Users/maroffo/Library/Mobile Documents/iCloud~md~obsidian/Documents/Second Brain"
     )
 
-    # Server
-    host: str = "127.0.0.1"
-    port: int = 8000
+    # Integration thresholds
+    auto_threshold: float = 0.8
+    interactive_threshold: float = 0.6
 
     # Logging
     log_level: str = "INFO"
