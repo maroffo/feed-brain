@@ -1,5 +1,5 @@
 # ABOUTME: CLI entry point for feed-brain with full pipeline commands.
-# ABOUTME: Supports fetch, triage, analyze, integrate, run, list, reset, and import-opml.
+# ABOUTME: Supports fetch, triage, analyze, integrate, digest, run, list, reset, and import-opml.
 
 import argparse
 import asyncio
@@ -89,8 +89,24 @@ async def _run_integrate() -> None:
         await _shutdown()
 
 
+def cmd_digest(_args: argparse.Namespace) -> None:
+    """Generate daily digest note in the vault."""
+    asyncio.run(_run_digest())
+
+
+async def _run_digest() -> None:
+    await _init()
+    try:
+        from feed_brain.services.digest import generate_digest
+
+        count = await generate_digest()
+        log.info("digest_done", articles=count)
+    finally:
+        await _shutdown()
+
+
 def cmd_run(_args: argparse.Namespace) -> None:
-    """Full pipeline: fetch → triage → analyze → integrate."""
+    """Full pipeline: fetch → triage → analyze → integrate → digest."""
     asyncio.run(_run_pipeline())
 
 
@@ -98,6 +114,7 @@ async def _run_pipeline() -> None:
     await _init()
     try:
         from feed_brain.services.analyzer import analyze_high_tier
+        from feed_brain.services.digest import generate_digest
         from feed_brain.services.fetcher import fetch_all_feeds
         from feed_brain.services.integrator import integrate_articles
         from feed_brain.services.triage import triage_new_articles
@@ -113,6 +130,9 @@ async def _run_pipeline() -> None:
 
         integrated = await integrate_articles()
         log.info("pipeline_integrate_done", integrated=integrated)
+
+        digest_count = await generate_digest()
+        log.info("pipeline_digest_done", articles=digest_count)
     finally:
         await _shutdown()
 
@@ -262,8 +282,11 @@ def main() -> None:
     # integrate
     subparsers.add_parser("integrate", help="Push high-tier articles to Second Brain")
 
+    # digest
+    subparsers.add_parser("digest", help="Generate daily digest note in vault")
+
     # run
-    subparsers.add_parser("run", help="Full pipeline: fetch→triage→analyze→integrate")
+    subparsers.add_parser("run", help="Full pipeline: fetch→triage→analyze→integrate→digest")
 
     # list
     list_parser = subparsers.add_parser("list", help="List recent articles")
@@ -283,6 +306,7 @@ def main() -> None:
         "triage": cmd_triage,
         "analyze": cmd_analyze,
         "integrate": cmd_integrate,
+        "digest": cmd_digest,
         "run": cmd_run,
         "list": cmd_list,
         "reset": cmd_reset,
