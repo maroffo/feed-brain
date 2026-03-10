@@ -1,13 +1,19 @@
 # ABOUTME: Generates daily digest notes with top articles sorted by priority.
-# ABOUTME: Writes Selezione - YYYY-MM-DD.md to vault Digests/ subfolder with YAML frontmatter.
+# ABOUTME: Translates content to Italian via local LLM, writes to vault Digests/ subfolder.
+
+from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+if TYPE_CHECKING:
+    from ollama import AsyncClient
 
 from feed_brain.config import get_settings
 from feed_brain.db.models import Article
@@ -15,6 +21,12 @@ from feed_brain.db.session import get_session_factory
 from feed_brain.models import ArticleStatus, Tier
 
 log = structlog.get_logger()
+
+TRANSLATE_PROMPT = """\
+Traduci i seguenti campi in italiano. Rispondi SOLO con un oggetto JSON \
+con le stesse chiavi e i valori tradotti. Non aggiungere o rimuovere chiavi. \
+Se un valore e' gia' in italiano, restituiscilo invariato.\
+"""
 
 # Priority ordering for tiers (lower value = higher priority)
 _TIER_ORDER = {Tier.HIGH: 0, Tier.MEDIUM: 1, Tier.LOW: 2}
@@ -30,6 +42,56 @@ def _sort_key(article: Article) -> tuple[int, float]:
     tier_rank = _TIER_ORDER.get(article.tier, 99)
     confidence = -(article.confidence or 0.0)
     return (tier_rank, confidence)
+
+
+async def _translate_fields(
+    fields: dict[str, str | list[str]],
+    ollama_client: AsyncClient,
+    model: str,
+) -> dict[str, str | list[str]]:
+    """Translate a dict of text fields to Italian using the local LLM.
+
+    Returns translated dict on success, original dict on failure.
+    """
+    try:
+        response = await ollama_client.chat(
+            model=model,
+            messages=[
+                {"role": "system", "content": TRANSLATE_PROMPT},
+                {"role": "user", "content": json.dumps(fields, ensure_ascii=False)},
+            ],
+        )
+        text = response.message.content.strip()
+        return json.loads(text)
+    except Exception as e:
+        log.warning("translate_failed", error=str(e))
+        return fields
+
+
+async def _translate_article(
+    article: Article, ollama_client: AsyncClient, model: str
+) -> dict[str, str | list[str]]:
+    """Extract and translate relevant fields from an article."""
+    fields: dict[str, str | list[str]] = {}
+
+    summary = article.deep_summary or article.summary
+    if summary:
+        fields["summary"] = summary
+    if article.reason:
+        fields["reason"] = article.reason
+    if article.money_quote:
+        fields["money_quote"] = article.money_quote
+    if article.deep_insights:
+        insights = (
+            json.loads(article.deep_insights) if isinstance(article.deep_insights, str) else []
+        )
+        if insights:
+            fields["insights"] = insights[:2]
+
+    if not fields:
+        return {}
+
+    return await _translate_fields(fields, ollama_client, model)
 
 
 def _build_frontmatter(today: str, articles: list[Article]) -> str:
@@ -52,11 +114,17 @@ def _build_frontmatter(today: str, articles: list[Article]) -> str:
     return "\n".join(lines)
 
 
-def _build_article_section(article: Article) -> str:
-    """Build the main section for a high or medium tier article."""
+def _build_article_section(
+    article: Article, translations: dict[str, str | list[str]] | None = None
+) -> str:
+    """Build the main section for a high or medium tier article.
+
+    Uses translated text from translations dict when available.
+    """
+    tr = translations or {}
     title = article.title or "Untitled"
-    summary = article.deep_summary or article.summary or "No summary available."
-    reason = article.reason or ""
+    summary = tr.get("summary", article.deep_summary or article.summary or "No summary available.")
+    reason = tr.get("reason", article.reason or "")
     tier_label = (article.tier or "?").upper()
     category_label = (article.category or "uncategorized").replace("_", " ")
 
@@ -76,13 +144,16 @@ def _build_article_section(article: Article) -> str:
 
     # Deep analysis extras for high-tier analyzed articles
     if article.tier == Tier.HIGH and article.money_quote:
-        parts.append(f"> {article.money_quote}")
+        money_quote = tr.get("money_quote", article.money_quote)
+        parts.append(f"> {money_quote}")
         parts.append("")
 
     if article.tier == Tier.HIGH and article.deep_insights:
-        insights = (
-            json.loads(article.deep_insights) if isinstance(article.deep_insights, str) else []
-        )
+        insights = tr.get("insights")
+        if insights is None:
+            insights = (
+                json.loads(article.deep_insights) if isinstance(article.deep_insights, str) else []
+            )
         for insight in insights[:2]:
             parts.append(f"- {insight}")
         if insights:
@@ -105,8 +176,16 @@ def _build_low_tier_section(articles: list[Article]) -> str:
     return "\n".join(lines)
 
 
-def _build_digest(today: str, articles: list[Article]) -> str:
-    """Build the full digest markdown content."""
+def _build_digest(
+    today: str,
+    articles: list[Article],
+    translations: dict[str, dict[str, str | list[str]]] | None = None,
+) -> str:
+    """Build the full digest markdown content.
+
+    translations is a dict keyed by article URL mapping to translated fields.
+    """
+    tr_map = translations or {}
     sorted_articles = sorted(articles, key=_sort_key)
 
     high_medium = [a for a in sorted_articles if a.tier in (Tier.HIGH, Tier.MEDIUM)]
@@ -119,7 +198,7 @@ def _build_digest(today: str, articles: list[Article]) -> str:
     parts.append("")
 
     for article in high_medium:
-        parts.append(_build_article_section(article))
+        parts.append(_build_article_section(article, tr_map.get(article.url)))
 
     if low:
         parts.append(_build_low_tier_section(low))
@@ -130,24 +209,32 @@ def _build_digest(today: str, articles: list[Article]) -> str:
 async def generate_digest(
     session: AsyncSession | None = None,
     vault_path: Path | None = None,
+    ollama_client: AsyncClient | None = None,
 ) -> int:
     """Generate the daily digest note in the vault.
 
     Queries for all articles classified today (UTC), excluding 'new' and 'error' status.
+    Translates summaries, reasons, and insights to Italian via local LLM.
     Returns the count of articles included.
     """
+    settings = get_settings()
     today = datetime.now(UTC).strftime("%Y-%m-%d")
     today_start = datetime.strptime(today, "%Y-%m-%d").replace(tzinfo=UTC)
     tomorrow_start = today_start + timedelta(days=1)
 
-    # Allow injecting session and vault_path for testing
+    # Allow injecting dependencies for testing
     own_session = session is None
     if own_session:
         factory = get_session_factory()
         session = factory()
 
     if vault_path is None:
-        vault_path = get_settings().vault_path
+        vault_path = settings.vault_path
+
+    if ollama_client is None:
+        from ollama import AsyncClient
+
+        ollama_client = AsyncClient(host=settings.ollama_host)
 
     try:
         result = await session.execute(
@@ -163,7 +250,18 @@ async def generate_digest(
             log.info("digest_skipped", reason="no_articles_today")
             return 0
 
-        content = _build_digest(today, articles)
+        # Translate article fields to Italian
+        translations: dict[str, dict[str, str | list[str]]] = {}
+        for article in articles:
+            if article.tier == Tier.LOW:
+                continue  # low-tier only shows title+link, no text to translate
+            tr = await _translate_article(article, ollama_client, settings.ollama_model)
+            if tr:
+                translations[article.url] = tr
+
+        log.info("digest_translations_done", translated=len(translations))
+
+        content = _build_digest(today, articles, translations)
 
         digest_dir = vault_path / "Digests"
         digest_dir.mkdir(parents=True, exist_ok=True)
