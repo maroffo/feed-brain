@@ -19,7 +19,7 @@ def test_resolve_topic_file_known_category(tmp_path):
     name, path = _resolve_topic_file("ai_agents", tmp_path)
     assert name == "Second Brain - AI Agents and Tools"
     assert path.name == "Second Brain - AI Agents and Tools.md"
-    assert "Second Brain" in str(path.parent)
+    assert path.parent == tmp_path
 
 
 def test_resolve_topic_file_unknown_category(tmp_path):
@@ -111,7 +111,7 @@ def test_integrate_article_appends_to_topic_file(tmp_path):
     target = integrate_article(article, settings)
 
     assert target == "Second Brain - AI Agents and Tools"
-    topic_file = tmp_path / "Second Brain" / "Second Brain - AI Agents and Tools.md"
+    topic_file = tmp_path / "Second Brain - AI Agents and Tools.md"
     assert topic_file.exists()
     content = topic_file.read_text()
     assert "### AI Agents Overview" in content
@@ -136,7 +136,7 @@ def test_integrate_article_logs_to_timeline(tmp_path):
 
     integrate_article(article, settings)
 
-    timeline = tmp_path / "Second Brain" / "Second Brain - Timeline.md"
+    timeline = tmp_path / "Second Brain - Timeline.md"
     assert timeline.exists()
     content = timeline.read_text()
     assert "Timeline Test" in content
@@ -167,7 +167,7 @@ def test_integrate_article_appends_not_overwrites(tmp_path):
     integrate_article(article1, settings)
     integrate_article(article2, settings)
 
-    topic_file = tmp_path / "Second Brain" / "Second Brain - Development.md"
+    topic_file = tmp_path / "Second Brain - Development.md"
     content = topic_file.read_text()
     assert "### First Article" in content
     assert "### Second Article" in content

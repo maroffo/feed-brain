@@ -1,5 +1,5 @@
 # ABOUTME: CLI entry point for feed-brain with full pipeline commands.
-# ABOUTME: Supports fetch, triage, analyze, integrate, run, list, and import-opml.
+# ABOUTME: Supports fetch, triage, analyze, integrate, run, list, reset, and import-opml.
 
 import argparse
 import asyncio
@@ -154,6 +154,56 @@ async def _run_list(tier: str | None, limit: int) -> None:
         await _shutdown()
 
 
+def cmd_reset(_args: argparse.Namespace) -> None:
+    """Reset triaged/integrated articles back to 'new' for re-processing."""
+    asyncio.run(_run_reset())
+
+
+async def _run_reset() -> None:
+    from sqlalchemy import update
+
+    await _init()
+    try:
+        from feed_brain.db.models import Article
+        from feed_brain.db.session import get_session_factory
+        from feed_brain.models import ArticleStatus
+
+        session_factory = get_session_factory()
+        async with session_factory() as session:
+            result = await session.execute(
+                update(Article)
+                .where(
+                    Article.status.in_(
+                        [
+                            ArticleStatus.TRIAGED,
+                            ArticleStatus.ANALYZED,
+                            ArticleStatus.INTEGRATED,
+                        ]
+                    )
+                )
+                .values(
+                    status=ArticleStatus.NEW,
+                    tier=None,
+                    category=None,
+                    confidence=None,
+                    summary=None,
+                    reason=None,
+                    classified_at=None,
+                    integrated_at=None,
+                    integration_target=None,
+                    deep_summary=None,
+                    deep_insights=None,
+                    money_quote=None,
+                    actionables=None,
+                )
+            )
+            await session.commit()
+            log.info("reset_done", articles_reset=result.rowcount)
+            print(f"Reset {result.rowcount} articles to 'new' status.")
+    finally:
+        await _shutdown()
+
+
 def cmd_import_opml(args: argparse.Namespace) -> None:
     """Import feeds from an OPML file."""
     asyncio.run(_run_import_opml(args.file))
@@ -220,6 +270,9 @@ def main() -> None:
     list_parser.add_argument("--tier", type=str, default=None, help="Filter by tier")
     list_parser.add_argument("--limit", type=int, default=50, help="Max articles to show")
 
+    # reset
+    subparsers.add_parser("reset", help="Reset all triaged/integrated articles for re-processing")
+
     # import-opml
     import_parser = subparsers.add_parser("import-opml", help="Import feeds from OPML file")
     import_parser.add_argument("file", type=str, help="Path to OPML file")
@@ -232,6 +285,7 @@ def main() -> None:
         "integrate": cmd_integrate,
         "run": cmd_run,
         "list": cmd_list,
+        "reset": cmd_reset,
         "import-opml": cmd_import_opml,
     }
 

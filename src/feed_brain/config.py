@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     analyzer_model: str = "claude-sonnet-4-6"
 
     # Ollama (triage)
-    ollama_model: str = "llama3.2:3b"
+    ollama_model: str = "gemma3:12b"
     ollama_host: str = "http://localhost:11434"
 
     # Database

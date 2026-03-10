@@ -21,7 +21,6 @@ from feed_brain.models import (
 log = structlog.get_logger()
 
 TIMELINE_FILE = "Second Brain - Timeline"
-SECOND_BRAIN_DIR = "Second Brain"
 
 
 def _resolve_topic_file(category: str | None, vault_path: Path) -> tuple[str, Path]:
@@ -35,9 +34,8 @@ def _resolve_topic_file(category: str | None, vault_path: Path) -> tuple[str, Pa
         cat = Category.DEVELOPMENT
 
     topic_name = CATEGORY_VAULT_MAP.get(cat, "Second Brain - Development")
-    topic_dir = vault_path / SECOND_BRAIN_DIR
-    topic_dir.mkdir(parents=True, exist_ok=True)
-    return topic_name, topic_dir / f"{topic_name}.md"
+    vault_path.mkdir(parents=True, exist_ok=True)
+    return topic_name, vault_path / f"{topic_name}.md"
 
 
 def _build_entry(article: Article) -> str:
@@ -133,7 +131,7 @@ def integrate_article(article: Article, settings: Settings) -> str | None:
         return None
 
     # Log to Timeline
-    timeline_path = vault_path / SECOND_BRAIN_DIR / f"{TIMELINE_FILE}.md"
+    timeline_path = vault_path / f"{TIMELINE_FILE}.md"
     timeline_entry = _build_timeline_entry(article, topic_name)
     _append_to_file(timeline_path, timeline_entry + "\n")
 
