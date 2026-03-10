@@ -226,10 +226,10 @@ async def _run_reset() -> None:
 
 def cmd_import_opml(args: argparse.Namespace) -> None:
     """Import feeds from an OPML file."""
-    asyncio.run(_run_import_opml(args.file))
+    asyncio.run(_run_import_opml(args.file, sync=args.sync))
 
 
-async def _run_import_opml(filepath: str) -> None:
+async def _run_import_opml(filepath: str, sync: bool = False) -> None:
     from pathlib import Path
 
     from sqlalchemy import select
@@ -242,25 +242,50 @@ async def _run_import_opml(filepath: str) -> None:
 
         content = Path(filepath).read_text(encoding="utf-8")
         feeds = parse_opml(content)
+        opml_urls = {feed["url"] for feed in feeds}
 
         session_factory = get_session_factory()
         imported = 0
+        reactivated = 0
+        deactivated = 0
 
         async with session_factory() as session:
+            # Import new feeds and reactivate existing ones in OPML
             for feed in feeds:
-                existing = await session.execute(
-                    select(FeedSource.id).where(FeedSource.url == feed["url"])
+                result = await session.execute(
+                    select(FeedSource).where(FeedSource.url == feed["url"])
                 )
-                if existing.scalar_one_or_none() is not None:
-                    continue
+                existing = result.scalar_one_or_none()
+                if existing:
+                    if not existing.active:
+                        existing.active = True
+                        reactivated += 1
+                else:
+                    session.add(FeedSource(name=feed["name"], url=feed["url"]))
+                    imported += 1
 
-                session.add(FeedSource(name=feed["name"], url=feed["url"]))
-                imported += 1
+            # With --sync, deactivate feeds not in OPML
+            if sync:
+                all_feeds = await session.execute(select(FeedSource))
+                for source in all_feeds.scalars().all():
+                    if source.url not in opml_urls and source.active:
+                        source.active = False
+                        deactivated += 1
 
             await session.commit()
 
-        log.info("opml_import_done", imported=imported, total=len(feeds))
         print(f"Imported {imported} new feeds (of {len(feeds)} total in OPML).")
+        if reactivated:
+            print(f"Reactivated {reactivated} feeds.")
+        if deactivated:
+            print(f"Deactivated {deactivated} feeds not in OPML.")
+        log.info(
+            "opml_import_done",
+            imported=imported,
+            reactivated=reactivated,
+            deactivated=deactivated,
+            total=len(feeds),
+        )
     finally:
         await _shutdown()
 
@@ -299,6 +324,7 @@ def main() -> None:
     # import-opml
     import_parser = subparsers.add_parser("import-opml", help="Import feeds from OPML file")
     import_parser.add_argument("file", type=str, help="Path to OPML file")
+    import_parser.add_argument("--sync", action="store_true", help="Deactivate feeds not in OPML")
 
     args = parser.parse_args()
     commands = {
