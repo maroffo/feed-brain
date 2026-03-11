@@ -377,7 +377,7 @@ async def analyze_high_tier() -> int:
                 article.status = ArticleStatus.ANALYZED
                 analyzed += 1
 
-        await session.commit()
+            await session.commit()
 
     log.info("analysis_complete", analyzed=analyzed, total=len(articles))
     return analyzed

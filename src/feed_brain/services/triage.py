@@ -182,7 +182,7 @@ async def triage_new_articles() -> int:
             else:
                 article.status = ArticleStatus.ERROR
 
-        await session.commit()
+            await session.commit()
 
     log.info("triage_complete", triaged=triaged, total=len(articles))
     return triaged
