@@ -111,26 +111,140 @@ def cmd_run(_args: argparse.Namespace) -> None:
 
 
 async def _run_pipeline() -> None:
+    import json
+    from datetime import UTC, datetime
+
+    from anthropic import AsyncAnthropic
+    from ollama import AsyncClient
+    from sqlalchemy import select
+
     await _init()
     try:
-        from feed_brain.services.analyzer import analyze_high_tier
+        from feed_brain.config import get_settings
+        from feed_brain.db.models import Article
+        from feed_brain.db.session import get_session_factory
+        from feed_brain.models import ArticleStatus, Tier
+        from feed_brain.services.analyzer import (
+            _is_arxiv,
+            analyze_article,
+            analyze_article_minions,
+        )
         from feed_brain.services.digest import generate_digest
         from feed_brain.services.fetcher import fetch_all_feeds
-        from feed_brain.services.integrator import integrate_articles
-        from feed_brain.services.triage import triage_new_articles
+        from feed_brain.services.integrator import integrate_article
+        from feed_brain.services.triage import TriageParseError, triage_article
 
+        settings = get_settings()
+
+        # Step 1: Fetch (batch, fast)
         new = await fetch_all_feeds()
         log.info("pipeline_fetch_done", new_articles=new)
 
-        triaged = await triage_new_articles()
-        log.info("pipeline_triage_done", triaged=triaged)
+        # Set up clients once
+        ollama_client = AsyncClient(host=settings.ollama_host)
+        anthropic_client = None
+        if settings.anthropic_api_key:
+            anthropic_client = AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value())
 
-        analyzed = await analyze_high_tier()
-        log.info("pipeline_analyze_done", analyzed=analyzed)
+        # Step 2: Process each article through the full pipeline
+        session_factory = get_session_factory()
+        triaged = 0
+        analyzed = 0
+        integrated = 0
 
-        integrated = await integrate_articles()
-        log.info("pipeline_integrate_done", integrated=integrated)
+        async with session_factory() as session:
+            result = await session.execute(
+                select(Article).where(
+                    Article.status == ArticleStatus.NEW,
+                    Article.content.isnot(None),
+                )
+            )
+            articles = result.scalars().all()
 
+            for article in articles:
+                # Triage
+                try:
+                    triage = await triage_article(article, client=ollama_client, settings=settings)
+                except TriageParseError:
+                    log.error("pipeline_triage_failed", title=article.title)
+                    article.status = ArticleStatus.ERROR
+                    await session.commit()
+                    continue
+
+                if not triage:
+                    article.status = ArticleStatus.ERROR
+                    await session.commit()
+                    continue
+
+                article.summary = triage.summary
+                article.tier = triage.tier.value
+                article.category = triage.category.value
+                article.reason = triage.reason
+                article.confidence = triage.confidence
+                article.classified_at = datetime.now(UTC)
+                article.status = ArticleStatus.TRIAGED
+                triaged += 1
+                await session.commit()
+
+                log.info(
+                    "pipeline_article_triaged",
+                    title=article.title[:60],
+                    tier=article.tier,
+                    confidence=article.confidence,
+                )
+
+                # Analyze (high-tier only)
+                if article.tier == Tier.HIGH and anthropic_client:
+                    analysis = None
+
+                    if _is_arxiv(article):
+                        log.info("pipeline_minions", title=article.title[:60])
+                        analysis = await analyze_article_minions(
+                            article,
+                            anthropic_client=anthropic_client,
+                            ollama_client=ollama_client,
+                        )
+
+                    if analysis is None:
+                        analysis = await analyze_article(article, client=anthropic_client)
+
+                    if analysis:
+                        article.deep_summary = analysis.summary
+                        article.deep_insights = json.dumps(analysis.insights)
+                        article.money_quote = analysis.money_quote
+                        article.actionables = json.dumps(analysis.actionables)
+                        article.status = ArticleStatus.ANALYZED
+                        analyzed += 1
+                        await session.commit()
+
+                        log.info("pipeline_article_analyzed", title=article.title[:60])
+
+                # Integrate (high-tier with sufficient confidence)
+                confidence = article.confidence or 0.0
+                if article.tier == Tier.HIGH and confidence >= settings.auto_threshold:
+                    target = integrate_article(article, settings)
+                    if target:
+                        article.integrated_at = datetime.now(UTC)
+                        article.integration_target = target
+                        article.status = ArticleStatus.INTEGRATED
+                        integrated += 1
+                        await session.commit()
+
+                        log.info(
+                            "pipeline_article_integrated",
+                            title=article.title[:60],
+                            target=target,
+                        )
+
+        log.info(
+            "pipeline_process_done",
+            triaged=triaged,
+            analyzed=analyzed,
+            integrated=integrated,
+            total=len(articles),
+        )
+
+        # Step 3: Digest (once at end, covers all articles processed today)
         digest_count = await generate_digest()
         log.info("pipeline_digest_done", articles=digest_count)
     finally:
