@@ -3,10 +3,26 @@
 
 import argparse
 import asyncio
+import logging
 import sys
 
 import structlog
 
+
+def _configure_logging() -> None:
+    """Configure structlog with human-readable output, no debug."""
+    structlog.configure(
+        wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
+        processors=[
+            structlog.contextvars.merge_contextvars,
+            structlog.processors.add_log_level,
+            structlog.processors.TimeStamper(fmt="%H:%M:%S"),
+            structlog.dev.ConsoleRenderer(),
+        ],
+    )
+
+
+_configure_logging()
 log = structlog.get_logger()
 
 
@@ -161,18 +177,25 @@ async def _run_pipeline() -> None:
             )
             articles = result.scalars().all()
 
-            for article in articles:
+            total = len(articles)
+            errors = 0
+
+            for i, article in enumerate(articles, 1):
+                progress = f"[{i}/{total}]"
+
                 # Triage
                 try:
                     triage = await triage_article(article, client=ollama_client, settings=settings)
                 except TriageParseError:
-                    log.error("pipeline_triage_failed", title=article.title)
+                    log.error("triage_failed", progress=progress, title=article.title[:60])
                     article.status = ArticleStatus.ERROR
+                    errors += 1
                     await session.commit()
                     continue
 
                 if not triage:
                     article.status = ArticleStatus.ERROR
+                    errors += 1
                     await session.commit()
                     continue
 
@@ -186,19 +209,23 @@ async def _run_pipeline() -> None:
                 triaged += 1
                 await session.commit()
 
+                tier_str = triage.tier.value.upper()
+                conf_str = f"{triage.confidence:.0%}"
                 log.info(
-                    "pipeline_article_triaged",
+                    "triaged",
+                    progress=progress,
+                    tier=tier_str,
+                    confidence=conf_str,
                     title=article.title[:60],
-                    tier=article.tier,
-                    confidence=article.confidence,
                 )
 
                 # Analyze (high-tier only)
                 if article.tier == Tier.HIGH and anthropic_client:
                     analysis = None
+                    method = "direct"
 
                     if _is_arxiv(article):
-                        log.info("pipeline_minions", title=article.title[:60])
+                        method = "minions"
                         analysis = await analyze_article_minions(
                             article,
                             anthropic_client=anthropic_client,
@@ -206,6 +233,7 @@ async def _run_pipeline() -> None:
                         )
 
                     if analysis is None:
+                        method = "direct"
                         analysis = await analyze_article(article, client=anthropic_client)
 
                     if analysis:
@@ -217,7 +245,12 @@ async def _run_pipeline() -> None:
                         analyzed += 1
                         await session.commit()
 
-                        log.info("pipeline_article_analyzed", title=article.title[:60])
+                        log.info(
+                            "analyzed",
+                            progress=progress,
+                            method=method,
+                            title=article.title[:60],
+                        )
 
                 # Integrate (high-tier with sufficient confidence)
                 confidence = article.confidence or 0.0
@@ -231,17 +264,19 @@ async def _run_pipeline() -> None:
                         await session.commit()
 
                         log.info(
-                            "pipeline_article_integrated",
-                            title=article.title[:60],
+                            "integrated",
+                            progress=progress,
                             target=target,
+                            title=article.title[:60],
                         )
 
         log.info(
-            "pipeline_process_done",
+            "pipeline_done",
+            total=total,
             triaged=triaged,
             analyzed=analyzed,
             integrated=integrated,
-            total=len(articles),
+            errors=errors,
         )
 
         # Step 3: Digest (once at end, covers all articles processed today)
