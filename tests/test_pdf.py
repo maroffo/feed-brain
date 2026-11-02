@@ -35,18 +35,15 @@ def test_to_pdf_url_passes_through_other():
     assert to_pdf_url(url) == url
 
 
-async def test_extract_pdf_downloads_with_the_page_user_agent():
-    """PDF downloads keep the browser UA, like article pages."""
-    mock_response = MagicMock()
-    mock_response.content = b"not a real pdf"
-    mock_response.raise_for_status = MagicMock()
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(return_value=mock_response)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-    settings = Settings(_env_file=None, feed_user_agent="feed-ua", page_user_agent="page-ua")
+async def test_extract_pdf_downloads_through_http_fetch_as_a_page():
+    """PDF downloads go through http.fetch as pages: browser UA and the proxy fallback."""
+    response = MagicMock()
+    response.content = b"not a real pdf"
+    settings = Settings(_env_file=None)
 
-    with patch("feed_brain.services.pdf.httpx.AsyncClient", return_value=mock_client) as client:
-        await extract_pdf("https://example.com/paper.pdf", settings)
+    with patch(
+        "feed_brain.services.pdf.http.fetch", new_callable=AsyncMock, return_value=response
+    ) as fetch:
+        await extract_pdf("https://arxiv.org/abs/2401.12345", settings)
 
-    assert client.call_args.kwargs["headers"] == {"User-Agent": "page-ua"}
+    fetch.assert_awaited_once_with("https://arxiv.org/pdf/2401.12345", settings, kind="page")

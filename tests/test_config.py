@@ -30,9 +30,11 @@ def test_database_url_without_password():
 
 def test_fetch_defaults_split_feed_and_page_user_agents():
     """Feeds get an honest bot UA (Akamai rejects a browser UA on a non-browser TLS stack);
-    article pages keep a browser UA; the timeout fits slow multi-MB feeds."""
+    article pages keep a browser UA and the shorter page timeout; feeds get 30 s for slow
+    multi-MB feeds."""
     settings = Settings(_env_file=None)
     assert settings.feed_user_agent.startswith("feed-brain/")
     assert "Mozilla" not in settings.feed_user_agent
     assert settings.page_user_agent.startswith("Mozilla/5.0")
     assert settings.feed_timeout == 30
+    assert settings.page_timeout == 15
