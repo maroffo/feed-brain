@@ -83,6 +83,14 @@ def _extract_with_trafilatura(html: str) -> str | None:
     return None
 
 
+def extract_from_html(html: str) -> str | None:
+    """Main content of an HTML document already in hand: readability, then trafilatura.
+
+    CPU-bound: call it from a thread inside async code.
+    """
+    return _extract_with_readability(html) or _extract_with_trafilatura(html)
+
+
 async def extract_content(url: str, settings: Settings | None = None) -> str | None:
     """Download and extract content from a URL.
 
