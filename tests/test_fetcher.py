@@ -47,6 +47,7 @@ def _mock_httpx_response(text="<rss></rss>"):
 
 class MockSettings:
     feed_user_agent = "test"
+    page_user_agent = "page"
     max_articles_per_feed = 15
     feed_timeout = 5
     article_max_age_hours = 48
@@ -154,3 +155,20 @@ async def test_fetch_falls_back_to_entry_summary_when_extraction_fails():
     contents = {a.url: a.content for a in result.articles}
     assert contents["https://ransomfeed.example/v/1"] == "LockBit claims Acme SpA (Italy)"
     assert contents["https://ransomfeed.example/v/2"] is None
+
+
+async def test_feed_download_uses_the_feed_user_agent():
+    """RSS downloads identify as feed-brain, not as the browser UA used for article pages."""
+    source = FeedSource(id=1, name="Test", url="https://test.com/feed.xml")
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=_mock_httpx_response())
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch("feed_brain.services.http.httpx.AsyncClient", return_value=mock_client) as client,
+        patch("feed_brain.services.fetcher.feedparser.parse", return_value=_make_parsed_feed([])),
+    ):
+        await _fetch_single_feed(source, MockSettings(), existing_urls=set())
+
+    assert client.call_args.kwargs["headers"] == {"User-Agent": "test"}

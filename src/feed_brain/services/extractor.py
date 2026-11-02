@@ -98,7 +98,7 @@ async def extract_content(url: str, settings: Settings | None = None) -> str | N
         return await extract_pdf(url, settings)
 
     try:
-        html = (await http.fetch(url, settings)).text
+        html = (await http.fetch(url, settings, user_agent=settings.page_user_agent)).text
 
         # Try readability-lxml first (CPU-bound, offload to thread)
         cleaned = await asyncio.to_thread(_extract_with_readability, html)

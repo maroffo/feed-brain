@@ -41,7 +41,7 @@ async def extract_pdf(url: str, settings: Settings | None = None) -> str | None:
     try:
         async with httpx.AsyncClient(
             timeout=30,
-            headers={"User-Agent": settings.feed_user_agent},
+            headers={"User-Agent": settings.page_user_agent},
             follow_redirects=True,
         ) as client:
             response = await client.get(pdf_url)
