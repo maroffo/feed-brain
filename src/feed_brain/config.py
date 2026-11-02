@@ -26,7 +26,7 @@ class Settings(BaseSettings):
 
     # Gemini (triage, clustering, writing)
     gemini_api_key: SecretStr | None = None
-    gemini_model: str = "gemini-3-flash-preview"
+    gemini_model: str = "gemini-3.8-flash"
     triage_concurrency: int = 5
 
     # Database (Postgres). Local defaults match docker-compose.yml; set DB_PASSWORD=feedbrain

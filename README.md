@@ -69,7 +69,7 @@ All settings come from environment variables (`.env` locally, job spec and Secre
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `GEMINI_API_KEY` | required | Triage, clustering, writing |
-| `GEMINI_MODEL` | `gemini-3-flash-preview` | Gemini model |
+| `GEMINI_MODEL` | `gemini-3.8-flash` | Gemini model |
 | `ANTHROPIC_API_KEY` | unset | Enables Opus deep analysis of the top stories |
 | `ANALYZER_MODEL` / `ANALYZER_EFFORT` | `claude-opus-5-5` / `high` | Deep analysis model and effort |
 | `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` | local docker | Postgres |
