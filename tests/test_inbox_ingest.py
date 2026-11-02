@@ -199,3 +199,23 @@ def test_s3_client_uses_the_default_aws_chain_without_a_role(monkeypatch):
     inbox.s3_client(settings(inbox_region="eu-west-1"))
 
     assert clients == [("s3", {"region_name": "eu-west-1"})]
+
+
+@pytest.mark.usefixtures("session_factory")
+async def test_a_store_failure_keeps_that_mail_and_continues(monkeypatch):
+    from sqlalchemy.exc import DBAPIError
+
+    real_store = inbox._store
+
+    async def store(session, mail):
+        if mail.url.endswith("/p/uno"):
+            raise DBAPIError("INSERT", {}, Exception("naive datetime"))
+        return await real_store(session, mail)
+
+    monkeypatch.setattr(inbox, "_store", store)
+    box = FakeMailbox({"mail/a": post_mail("uno"), "mail/b": post_mail("due")})
+
+    stats = await ingest_inbox(box, settings())
+
+    assert (stats.failed, stats.stored) == (1, 1)
+    assert list(box.mails) == ["mail/a"]

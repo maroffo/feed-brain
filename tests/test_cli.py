@@ -66,3 +66,18 @@ def test_cloud_severity_renames_level():
         "event": "x",
         "severity": "WARNING",
     }
+
+
+def test_collect_dry_run_flag_reaches_the_pipeline(monkeypatch):
+    """`collect --dry-run` reads the newsletter inbox without deleting from it."""
+    from feed_brain import __main__ as cli
+
+    seen = {}
+
+    async def fake_run_collect(dry_run=False):
+        seen["dry_run"] = dry_run
+
+    monkeypatch.setattr(cli, "_run_collect", fake_run_collect)
+    monkeypatch.setattr("sys.argv", ["feed-brain", "collect", "--dry-run"])
+    cli.main()
+    assert seen == {"dry_run": True}

@@ -3,7 +3,9 @@
 
 import base64
 import json
+from datetime import UTC
 from email.message import EmailMessage
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -61,6 +63,12 @@ def make_mail(
 
 
 def substack_html(post: str) -> str:
+    """Shaped like real Substack mails: a redirect to the post, app links, and the post's own
+    open.substack.com share/comment links (all carrying personal tokens)."""
+    parts = urlsplit(post)
+    pub = parts.netloc.split(".")[0]
+    slug = parts.path.rsplit("/", 1)[-1]
+    open_link = f"https://open.substack.com/pub/{pub}/p/{slug}?r=w4ca&token={SECRET}&action=share"
     return (
         '<div class="gmail_quote">'
         f'<a href="{substack_redirect("https://pub.substack.com/subscribe?r=w4ca")}">Iscriviti</a>'
@@ -68,6 +76,7 @@ def substack_html(post: str) -> str:
         f'<a href="https://substack.com/app-link/post?publication_id=1&post_id=2&token={SECRET}">'
         "Polonia e Stato di diritto</a>"
         f"<article><h1>Polonia e Stato di diritto</h1><p>{BODY}</p></article>"
+        f'<a href="{open_link}">Condividi</a>'
         f'<a href="{substack_redirect(f"https://pub.substack.com/action/disable_email?token={SECRET}")}">'
         "Unsubscribe</a></div>"
     )
@@ -162,10 +171,87 @@ def test_post_url_normalizes_open_substack_and_custom_domains():
     assert post_url([f"https://open.substack.com/pub/burioni/p/dopo?token={SECRET}"]) == (
         "https://burioni.substack.com/p/dopo"
     )
-    assert post_url(["https://newsletter.example.org/p/slug/?utm_source=email"]) == (
-        "https://newsletter.example.org/p/slug"
-    )
+    # custom domain wins when it carries the same post as the open.substack.com link
+    custom = substack_redirect(f"https://newsletter.example.org/p/the-pulse?token={SECRET}")
+    opened = f"https://open.substack.com/pub/example/p/the-pulse?token={SECRET}"
+    assert post_url([custom, opened]) == "https://newsletter.example.org/p/the-pulse"
+    # without open.substack.com, a post link counts only when the mail repeats it
+    repeated = "https://newsletter.example.org/p/slug/?utm_source=email"
+    assert post_url([repeated, repeated]) == "https://newsletter.example.org/p/slug"
+    assert post_url([repeated]) is None
     assert post_url(["https://substack.com/app-link/post?post_id=2", "https://x.org/about"]) is None
+
+
+def test_a_post_cited_by_a_digest_is_not_the_issue_url():
+    cited = drip_link("https://other.substack.com/p/cited")
+    html = f'<div class="gmail_quote"><p>{BODY}</p><a href="{cited}">Cited</a><a href="{cited}">Again</a></div>'
+    mail = parse_mail(make_mail(html=html, subject="Fwd: Your Syllabus This Week"))
+    assert mail.url == "mid:CAF123@mail.gmail.com"
+    assert mail.source_name == "Newsletter" and mail.source_key == "newsletter"
+
+
+def raw_mail(headers: str, body: bytes) -> bytes:
+    return headers.replace("\n", "\r\n").encode() + b"\r\n" + body
+
+
+def test_mails_without_message_id_get_distinct_stable_ids():
+    first = raw_mail("From: a@b.com\nSubject: Uno\n", b"Primo testo della newsletter.")
+    second = raw_mail("From: a@b.com\nSubject: Due\n", b"Secondo testo della newsletter.")
+    urls = {parse_mail(first).url, parse_mail(second).url}
+    assert len(urls) == 2 and all(u.startswith("mid:sha256-") for u in urls)
+    assert parse_mail(first).url == parse_mail(first).url
+
+
+@pytest.mark.parametrize(
+    ("date", "expected_utc_hour"),
+    [
+        ("Mon, 02 Nov 2026 20:17:04 -0000", 20),
+        ("Mon, 02 Nov 2026 20:17:04 +0100", 19),
+        ("not a date", None),
+        (None, None),
+    ],
+)
+def test_published_is_timezone_aware_or_none(date, expected_utc_hour):
+    headers = "From: a@b.com\nSubject: x\n" + (f"Date: {date}\n" if date else "")
+    mail = parse_mail(raw_mail(headers, b"Testo della newsletter."))
+    if expected_utc_hour is None:
+        assert mail.published is None
+    else:
+        assert mail.published.tzinfo is not None
+        assert mail.published.astimezone(UTC).hour == expected_utc_hour
+
+
+def test_unknown_charset_is_decoded_with_replacement():
+    raw = raw_mail(
+        "From: a@b.com\nSubject: x\nContent-Type: text/plain; charset=unknown-8bit\n",
+        "Caffè e giustizia".encode(),
+    )
+    assert "giustizia" in parse_mail(raw).content
+
+
+def test_markup_only_html_falls_back_to_the_plain_part():
+    mail = parse_mail(make_mail(html="<div><img src='x.png'></div>", plain="Testo solo in chiaro."))
+    assert mail.content == "Testo solo in chiaro."
+
+
+def test_plain_text_only_substack_mail_keeps_its_post_url():
+    link = f"https://open.substack.com/pub/burioni/p/dopo?token={SECRET}"
+    raw = raw_mail(
+        "From: a@b.com\nSubject: Fwd: Dopo\n", f"Leggi qui <{link}>\nTesto del post.".encode()
+    )
+    mail = parse_mail(raw)
+    assert mail.url == "https://burioni.substack.com/p/dopo"
+    assert SECRET not in mail.content
+
+
+def test_a_mail_without_subject_keeps_its_sender():
+    mail = parse_mail(
+        make_mail(
+            html=f"<p>{BODY}</p>", subject="", sender="Roberto Burioni <burioni@substack.com>"
+        )
+    )
+    assert (mail.source_name, mail.source_key) == ("Roberto Burioni", "burioni@substack.com")
+    assert mail.title == "Newsletter"
 
 
 @pytest.mark.parametrize(

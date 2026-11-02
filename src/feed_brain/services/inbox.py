@@ -4,8 +4,10 @@
 import asyncio
 import base64
 import binascii
+import hashlib
 import json
 import re
+from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from email import message_from_bytes, policy
@@ -18,6 +20,7 @@ import boto3
 import structlog
 from bs4 import BeautifulSoup
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from feed_brain.config import Settings
@@ -107,19 +110,35 @@ def decode_redirect(href: str) -> str:
 
 
 def post_url(links: list[str]) -> str | None:
-    """First link that is a newsletter post page, without query string or fragment."""
+    """The issue's own post page, without query string or fragment.
+
+    Substack mails link their own post through open.substack.com share/comment links; a
+    /p/<slug> link with the same slug (custom domain) is preferred to the substack.com form.
+    Elsewhere a /p/<slug> link counts only when the mail repeats it, since a single one is
+    usually a cited article; links unwrapped from Drip (digests of others' articles) never do.
+    """
+    opened: tuple[str, str] | None = None
+    posts: Counter[str] = Counter()
     for href in links:
+        unwrapped_from_drip = urlsplit(href).netloc.endswith("dripemail2.com")
         parts = urlsplit(decode_redirect(href))
         if parts.scheme not in ("http", "https") or not parts.netloc:
             continue
         if parts.netloc == "open.substack.com":
             match = _OPEN_SUBSTACK_POST.match(parts.path)
-            if match:
-                return f"https://{match[1]}.substack.com/p/{match[2]}"
-            continue
-        if parts.netloc != "substack.com" and _SUBSTACK_POST.match(parts.path):
-            return f"https://{parts.netloc}{parts.path.rstrip('/')}"
-    return None
+            if match and opened is None:
+                opened = (match[1], match[2])
+        elif (
+            parts.netloc != "substack.com"
+            and _SUBSTACK_POST.match(parts.path)
+            and not unwrapped_from_drip
+        ):
+            posts[f"https://{parts.netloc}{parts.path.rstrip('/')}"] += 1
+    if opened is not None:
+        pub, slug = opened
+        same_post = next((url for url in posts if url.rsplit("/", 1)[-1] == slug), None)
+        return same_post or f"https://{pub}.substack.com/p/{slug}"
+    return next((url for url, seen in posts.most_common() if seen >= 2), None)
 
 
 def _lines(text: str) -> str:
@@ -130,23 +149,31 @@ def _html_text(html: str) -> str:
     return _lines(BeautifulSoup(html, "html.parser").get_text("\n"))
 
 
+def _without_urls(text: str) -> str:
+    return re.sub(r"<?https?://\S+>?", "", text).strip()
+
+
 def mail_text(html: str | None, plain: str | None) -> str:
-    """Readable text of a newsletter: the extracted article when it holds most of the text
-    (long-form posts), the whole body otherwise (link digests defeat readability). No URLs."""
+    """Readable text of a newsletter, without URLs: the extracted article when it holds most
+    of the text (long-form posts), the whole HTML body otherwise (link digests defeat
+    readability), the plain part when the HTML has no text at all."""
+    text = ""
     if html:
         whole = _html_text(html)
         main = _html_text(extract_from_html(html) or "")
-        text = main if len(main) >= len(whole) / 2 else whole
-    else:
-        text = _lines(plain or "")
-    return re.sub(r"<?https?://\S+>?", "", text).strip()
+        text = _without_urls(main if len(main) >= len(whole) / 2 else whole)
+    return text or _without_urls(_lines(plain or ""))
 
 
 def _body(msg: EmailMessage, subtype: str) -> str | None:
     part = msg.get_body(preferencelist=(subtype,))
     if part is None:
         return None
-    content = part.get_content()
+    try:
+        content = part.get_content()
+    except (LookupError, UnicodeDecodeError):  # unknown or wrong charset label
+        payload = part.get_payload(decode=True)
+        content = payload.decode("utf-8", errors="replace") if isinstance(payload, bytes) else None
     return content if isinstance(content, str) else None
 
 
@@ -165,21 +192,28 @@ def parse_mail(raw: bytes) -> InboxMail:
         raise SkipMail("gmail_forwarding_confirmation", keep=True)
 
     html = _body(msg, "html")
+    plain = _body(msg, "plain")
     anchors = BeautifulSoup(html, "html.parser").find_all("a") if html else []
     links = [href for a in anchors if isinstance(href := a.get("href"), str)]
-    content = clean_text(mail_text(html, _body(msg, "plain")))
+    if not links and plain:
+        links = re.findall(r"https?://[^\s<>\"')]+", plain)
+    content = clean_text(mail_text(html, plain))
     if not content:
         raise SkipMail("empty")
 
-    subject = str(msg.get("Subject", ""))
+    subject = str(msg.get("Subject", "") or "")
+    forwarded = bool(_FORWARD_PREFIX.match(subject))
     title = strip_forward_prefix(subject) or "Newsletter"
     message_id = str(msg.get("Message-ID", "")).strip()
-    url = post_url(links) or f"mid:{message_id.strip('<>')}"
+    # Without a Message-ID the content hash keeps distinct mails distinct (and re-reads stable).
+    mail_id = message_id.strip("<> \t") or f"sha256-{hashlib.sha256(raw).hexdigest()[:32]}"
+    url = post_url(links) or f"mid:{mail_id}"
 
-    if title != subject.strip():
+    if forwarded:
         # Forwarded by hand: From is the forwarder, so name the source after the publication.
         host = urlsplit(url).netloc if url.startswith("http") else ""
-        source_name = source_key = host or FALLBACK_SOURCE
+        source_name = host or FALLBACK_SOURCE
+        source_key = source_name.lower()
     else:
         # Sent or auto-forwarded: Gmail filters keep the original From.
         source_name = name or address or FALLBACK_SOURCE
@@ -189,6 +223,8 @@ def parse_mail(raw: bytes) -> InboxMail:
         published = parsedate_to_datetime(str(msg["Date"])) if msg["Date"] else None
     except (TypeError, ValueError):
         published = None
+    if published is not None and published.tzinfo is None:
+        published = published.replace(tzinfo=UTC)  # "-0000" or no zone: UTC per RFC 5322
 
     return InboxMail(
         title=clean_text(title)[:500],
@@ -344,9 +380,14 @@ async def ingest_inbox(mailbox: Mailbox, settings: Settings, *, delete: bool = T
             stats.failed += 1
             continue
         else:
-            async with factory() as session:
-                stored = await _store(session, mail)
-                await session.commit()
+            try:
+                async with factory() as session:
+                    stored = await _store(session, mail)
+                    await session.commit()
+            except SQLAlchemyError as e:
+                log.error("inbox_store_failed", key=key, error=str(e)[:200])
+                stats.failed += 1
+                continue
             if stored:
                 stats.stored += 1
                 log.info("inbox_stored", key=key, source=mail.source_name, title=mail.title[:80])
