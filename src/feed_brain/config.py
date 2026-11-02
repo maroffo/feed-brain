@@ -3,6 +3,7 @@
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 from urllib.parse import quote_plus
 
 from pydantic import SecretStr
@@ -18,13 +19,15 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Anthropic (deep analysis)
+    # Anthropic (deep analysis on top stories)
     anthropic_api_key: SecretStr | None = None
-    analyzer_model: str = "claude-sonnet-4-6"
+    analyzer_model: str = "claude-opus-5-5"
+    analyzer_effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
 
-    # Ollama (triage)
-    ollama_model: str = "qwen3.5:4b"
-    ollama_host: str = "http://localhost:11434"
+    # Gemini (triage, clustering, writing)
+    gemini_api_key: SecretStr | None = None
+    gemini_model: str = "gemini-3-flash-preview"
+    triage_concurrency: int = 5
 
     # Database (Postgres). Local defaults match docker-compose.yml; set DB_PASSWORD=feedbrain
     db_host: str = "localhost"
@@ -43,6 +46,12 @@ class Settings(BaseSettings):
     max_articles_per_feed: int = 15
     article_max_age_hours: int = 48
     fetch_concurrency: int = 10
+
+    # Daily bulletin
+    candidate_window_hours: int = 36
+    top_stories: int = 10
+    radar_cap: int = 15
+    analysis_concurrency: int = 3
 
     # Second Brain (Obsidian vault)
     vault_path: Path = Path(

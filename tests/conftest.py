@@ -32,7 +32,8 @@ async def session_factory(monkeypatch) -> AsyncGenerator[async_sessionmaker[Asyn
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    monkeypatch.setattr("feed_brain.db.session.get_session_factory", lambda: factory)
+    # Seed the module cache so every import style of get_session_factory() gets SQLite.
+    monkeypatch.setattr("feed_brain.db.session._session_factory", factory)
     yield factory
     await engine.dispose()
 

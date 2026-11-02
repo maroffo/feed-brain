@@ -1,118 +1,203 @@
-# ABOUTME: Tests for the Ollama triage service.
-# ABOUTME: Verifies triage parsing, retry logic, and error handling.
+# ABOUTME: Tests for Gemini-based triage: prompt content, persistence, concurrency, failure handling.
+# ABOUTME: Gemini is replaced by a fake with the same `generate` coroutine signature.
 
-import json
-from unittest.mock import AsyncMock, MagicMock
+from datetime import UTC, datetime, timedelta
 
-from feed_brain.db.models import Article
-from feed_brain.models import Category, Tier
-from feed_brain.services.triage import TriageParseError, triage_article
+from sqlalchemy import select
+
+from feed_brain.ai.gemini import GeminiError
+from feed_brain.db.models import Article, FeedSource
+from feed_brain.models import Category, Section, Tier, TriageResult
+from feed_brain.services import triage as triage_mod
+from feed_brain.services.triage import (
+    SYSTEM_PROMPT,
+    TriageInput,
+    triage_article,
+    triage_new_articles,
+)
 
 
-def _mock_ollama_response(data: dict) -> MagicMock:
-    """Create a mock Ollama chat response."""
-    response = MagicMock()
-    response.message = MagicMock()
-    response.message.content = json.dumps(data)
-    return response
-
-
-async def test_triage_article_success():
-    """Valid Ollama response is parsed into TriageResult."""
-    article = Article(
-        url="https://example.com/ai-agents",
-        title="Building AI Agents with Context Engineering",
-        content="This article discusses advanced context engineering patterns...",
-        status="new",
-    )
-
-    api_data = {
+def _result(**overrides) -> TriageResult:
+    data = {
         "tier": "high",
-        "category": "ai_agents",
-        "confidence": 0.92,
-        "summary": "Overview of context engineering patterns for AI agents.",
-        "reason": "Core topic of interest with practical patterns.",
+        "section": "security",
+        "category": "devops_cloud",
+        "confidence": 0.9,
+        "summary": "Riassunto.",
+        "reason": "Motivo.",
     }
-
-    client = AsyncMock()
-    client.chat = AsyncMock(return_value=_mock_ollama_response(api_data))
-
-    result = await triage_article(article, client=client)
-
-    assert result is not None
-    assert result.tier == Tier.HIGH
-    assert result.category == Category.AI_AGENTS
-    assert result.confidence == 0.92
-    assert "context engineering" in result.summary.lower()
+    data.update(overrides)
+    return TriageResult.model_validate(data)
 
 
-async def test_triage_article_invalid_json_raises_parse_error():
-    """Invalid JSON triggers TriageParseError (for retry)."""
-    article = Article(url="https://example.com/bad", title="Bad", content="content", status="new")
+class FakeGemini:
+    """Records prompts; answers from a per-title table or raises."""
 
-    response = MagicMock()
-    response.message = MagicMock()
-    response.message.content = "This is not JSON"
+    def __init__(self, answers: dict[str, TriageResult | Exception] | None = None):
+        self.answers = answers or {}
+        self.prompts: list[str] = []
 
-    client = AsyncMock()
-    client.chat = AsyncMock(return_value=response)
-
-    import pytest
-
-    with pytest.raises(TriageParseError):
-        await triage_article(article, client=client)
-
-
-async def test_triage_article_connection_error_returns_none():
-    """Connection errors return None without raising."""
-    article = Article(url="https://example.com/err", title="Err", content="content", status="new")
-
-    client = AsyncMock()
-    client.chat = AsyncMock(side_effect=ConnectionError("Ollama not running"))
-
-    result = await triage_article(article, client=client)
-    assert result is None
+    async def generate(self, prompt, system, schema):
+        assert schema is TriageResult
+        assert system == SYSTEM_PROMPT
+        self.prompts.append(prompt)
+        for title, answer in self.answers.items():
+            if f"Title: {title}\n" in prompt:
+                if isinstance(answer, Exception):
+                    raise answer
+                return answer
+        return _result()
 
 
-async def test_triage_article_missing_key_raises_parse_error():
-    """Response missing required keys triggers TriageParseError."""
-    article = Article(
-        url="https://example.com/missing", title="Missing", content="content", status="new"
+def test_system_prompt_includes_interests_sections_and_categories():
+    assert "Security with real impact" in SYSTEM_PROMPT  # from interests.md
+    assert "ABOUTME" not in SYSTEM_PROMPT
+    for section in Section:
+        assert f"- {section.value}:" in SYSTEM_PROMPT
+    for category in Category:
+        assert f"- {category.value}:" in SYSTEM_PROMPT
+    assert "Italian" in SYSTEM_PROMPT
+
+
+def _item(title="Big breach", content="c", feed="Krebs on Security", folder="0. Security"):
+    return TriageInput(
+        article_id=1, title=title, author="Brian", content=content, feed_name=feed, folder=folder
     )
 
-    api_data = {"tier": "high", "category": "ai_agents"}  # missing confidence, summary, reason
 
-    client = AsyncMock()
-    client.chat = AsyncMock(return_value=_mock_ollama_response(api_data))
+async def test_triage_article_sends_feed_hint_and_content():
+    gemini = FakeGemini()
 
-    import pytest
+    result = await triage_article(_item(content="x" * 5000), gemini)
 
-    with pytest.raises(TriageParseError):
-        await triage_article(article, client=client)
+    assert result == _result()
+    prompt = gemini.prompts[0]
+    assert "Feed: Krebs on Security" in prompt
+    assert "Folder: 0. Security" in prompt
+    assert "Title: Big breach\n" in prompt
+    assert "x" * 3000 in prompt and "x" * 3001 not in prompt
 
 
-async def test_triage_article_low_tier():
-    """Low-tier articles are correctly classified."""
-    article = Article(
-        url="https://example.com/marketing",
-        title="10 Marketing Tips for 2026",
-        content="Basic marketing strategies for beginners...",
-        status="new",
+async def test_triage_article_returns_none_on_gemini_error():
+    gemini = FakeGemini({"Boom": GeminiError("down")})
+    assert await triage_article(_item(title="Boom", folder=None), gemini) is None
+
+
+async def _seed(session_factory, *articles: Article) -> None:
+    async with session_factory() as session:
+        source = FeedSource(name="Krebs", url="https://krebs.example/feed", folder="0. Security")
+        session.add(source)
+        await session.flush()
+        for article in articles:
+            article.source_id = source.id
+            session.add(article)
+        await session.commit()
+
+
+async def test_triage_new_articles_persists_results(session_factory):
+    now = datetime.now(UTC)
+    await _seed(
+        session_factory,
+        Article(url="https://k/1", title="One", content="c", status="new", fetched_at=now),
+        Article(url="https://k/2", title="Two", content="c", status="new", fetched_at=now),
+    )
+    gemini = FakeGemini({"Two": _result(tier="low", section="threat_radar", confidence=0.4)})
+
+    triaged = await triage_new_articles(gemini=gemini)
+
+    assert triaged == 2
+    async with session_factory() as session:
+        rows = {a.title: a for a in (await session.execute(select(Article))).scalars()}
+    assert rows["One"].status == "triaged"
+    assert (rows["One"].tier, rows["One"].section, rows["One"].category) == (
+        Tier.HIGH,
+        Section.SECURITY,
+        Category.DEVOPS_CLOUD,
+    )
+    assert rows["One"].classified_at is not None
+    assert (rows["Two"].tier, rows["Two"].section, rows["Two"].confidence) == (
+        "low",
+        "threat_radar",
+        0.4,
+    )
+    assert all("Feed: Krebs" in p and "Folder: 0. Security" in p for p in gemini.prompts)
+
+
+async def test_triage_failure_leaves_article_new_for_next_run(session_factory):
+    now = datetime.now(UTC)
+    await _seed(
+        session_factory,
+        Article(url="https://k/1", title="Fails", content="c", status="new", fetched_at=now),
+        Article(url="https://k/2", title="Works", content="c", status="new", fetched_at=now),
+    )
+    gemini = FakeGemini({"Fails": GeminiError("down")})
+
+    assert await triage_new_articles(gemini=gemini) == 1
+    async with session_factory() as session:
+        rows = {a.title: a for a in (await session.execute(select(Article))).scalars()}
+    assert rows["Fails"].status == "new"
+    assert rows["Works"].status == "triaged"
+
+
+async def test_triage_skips_stale_and_contentless_articles(session_factory):
+    now = datetime.now(UTC)
+    await _seed(
+        session_factory,
+        Article(
+            url="https://k/1",
+            title="Stale",
+            content="c",
+            status="new",
+            fetched_at=now - timedelta(days=5),
+        ),
+        Article(url="https://k/2", title="Empty", content=None, status="new", fetched_at=now),
+        Article(url="https://k/3", title="Done", content="c", status="triaged", fetched_at=now),
+    )
+    gemini = FakeGemini()
+    assert await triage_new_articles(gemini=gemini) == 0
+    assert gemini.prompts == []
+
+
+async def test_triage_strips_nul_bytes_from_llm_output(session_factory):
+    """A NUL byte in Gemini output crashed Postgres in a real run; it must be stored cleaned."""
+    await _seed(
+        session_factory,
+        Article(
+            url="https://k/1", title="Nul", content="c", status="new", fetched_at=datetime.now(UTC)
+        ),
+    )
+    gemini = FakeGemini(
+        {"Nul": _result(summary="HackerBooks \x08\x00\x08 è un tool", reason="ok\x00")}
     )
 
-    api_data = {
-        "tier": "low",
-        "category": "marketing",
-        "confidence": 0.85,
-        "summary": "Generic marketing tips without novel frameworks.",
-        "reason": "Basic tutorial content with no actionable insight.",
-    }
+    assert await triage_new_articles(gemini=gemini) == 1
+    async with session_factory() as session:
+        article = (await session.execute(select(Article))).scalar_one()
+    assert article.summary == "HackerBooks  è un tool"
+    assert article.reason == "ok"
 
-    client = AsyncMock()
-    client.chat = AsyncMock(return_value=_mock_ollama_response(api_data))
 
-    result = await triage_article(article, client=client)
+async def test_triage_store_failure_skips_article_and_continues(session_factory, monkeypatch):
+    """A DB error on one article is rolled back and the rest are still stored."""
+    from sqlalchemy.exc import DBAPIError
 
-    assert result is not None
-    assert result.tier == Tier.LOW
-    assert result.category == Category.MARKETING
+    now = datetime.now(UTC)
+    await _seed(
+        session_factory,
+        Article(url="https://k/1", title="Bad", content="c", status="new", fetched_at=now),
+        Article(url="https://k/2", title="Good", content="c", status="new", fetched_at=now),
+    )
+    real_apply = triage_mod._apply
+
+    async def flaky_apply(session, article_id, result):
+        if result.summary == "poison":
+            raise DBAPIError("UPDATE", {}, Exception("invalid byte sequence"))
+        await real_apply(session, article_id, result)
+
+    monkeypatch.setattr(triage_mod, "_apply", flaky_apply)
+    gemini = FakeGemini({"Bad": _result(summary="poison")})
+
+    assert await triage_new_articles(gemini=gemini) == 1
+    async with session_factory() as session:
+        rows = {a.title: a.status for a in (await session.execute(select(Article))).scalars()}
+    assert rows == {"Bad": "new", "Good": "triaged"}

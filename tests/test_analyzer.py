@@ -1,319 +1,199 @@
-# ABOUTME: Tests for the Anthropic deep analysis service.
-# ABOUTME: Verifies analysis parsing, error handling, output structure, and Minions protocol.
+# ABOUTME: Tests for Opus 5.5 deep analysis and the Minions protocol (Opus decomposes, Gemini reads).
+# ABOUTME: The Anthropic client and Gemini are mocked; request shape, refusals and fallbacks are asserted.
 
-import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
+import httpx
+from anthropic import APIConnectionError
+
+from feed_brain.ai.gemini import GeminiError
+from feed_brain.config import Settings
 from feed_brain.db.models import Article
+from feed_brain.models import ArticleStatus, DeepAnalysis
 from feed_brain.services.analyzer import (
-    _decompose,
-    _extract_answer,
-    _is_arxiv,
-    _synthesize,
+    FALLBACK_BETA,
+    Questions,
     analyze_article,
     analyze_article_minions,
+    apply_analysis,
+    deep_analyze,
+    is_arxiv,
 )
 
-
-def _mock_anthropic_response(data: dict) -> MagicMock:
-    """Create a mock Anthropic API response."""
-    content_block = MagicMock(type="text")
-    content_block.text = json.dumps(data)
-    response = MagicMock()
-    response.content = [content_block]
-    return response
+ANALYSIS = DeepAnalysis(
+    summary="Sintesi.", insights=["a", "b"], money_quote="Quote.", actionables=["Prova X"]
+)
+SETTINGS = Settings(_env_file=None, analyzer_model="claude-opus-5-5", analyzer_effort="high")
 
 
-async def test_analyze_article_success():
-    """Valid API response is parsed into DeepAnalysis."""
-    article = Article(
-        url="https://example.com/deep",
-        title="Deep Dive into Context Engineering",
-        content="This article provides a comprehensive analysis...",
-        status="triaged",
-        tier="high",
+def _response(parsed, stop_reason="end_turn", stop_details=None, model="claude-opus-5-5"):
+    return SimpleNamespace(
+        parsed_output=parsed,
+        stop_reason=stop_reason,
+        stop_details=stop_details,
+        model=model,
+        usage=SimpleNamespace(input_tokens=1200, output_tokens=800),
     )
 
-    api_data = {
-        "summary": "Comprehensive analysis of context engineering patterns.",
-        "insights": ["Insight one", "Insight two"],
-        "money_quote": "The best code is the code you don't write.",
-        "actionables": ["Try pattern X", "Use framework Y"],
-    }
 
-    client = AsyncMock()
-    client.messages.create = AsyncMock(return_value=_mock_anthropic_response(api_data))
-
-    result = await analyze_article(article, client=client)
-
-    assert result is not None
-    assert "context engineering" in result.summary.lower()
-    assert len(result.insights) == 2
-    assert result.money_quote == "The best code is the code you don't write."
-    assert len(result.actionables) == 2
+def _client(*responses) -> MagicMock:
+    client = MagicMock()
+    client.beta.messages.parse = AsyncMock(side_effect=list(responses))
+    return client
 
 
-async def test_analyze_article_invalid_json():
-    """Invalid JSON response returns None."""
-    article = Article(
-        url="https://example.com/bad", title="Bad", content="content", status="triaged", tier="high"
+def _article(url="https://example.com/a", content="Body " * 100) -> Article:
+    return Article(url=url, title="Title", author="Author", content=content, status="triaged")
+
+
+async def test_analyze_article_request_shape():
+    client = _client(_response(ANALYSIS))
+
+    result = await analyze_article(_article(), client, SETTINGS)
+
+    assert result == ANALYSIS
+    kwargs = client.beta.messages.parse.call_args.kwargs
+    assert kwargs["model"] == "claude-opus-5-5"
+    assert kwargs["output_format"] is DeepAnalysis
+    assert kwargs["output_config"] == {"effort": "high"}
+    assert kwargs["fallbacks"] == "default"
+    assert kwargs["betas"] == [FALLBACK_BETA] == ["server-side-fallback-2026-07-01"]
+    assert "thinking" not in kwargs and "temperature" not in kwargs
+    assert "Title: Title" in kwargs["messages"][0]["content"]
+    assert "Italian" in kwargs["system"]
+
+
+async def test_analyze_article_refusal_returns_none():
+    client = _client(
+        _response(None, stop_reason="refusal", stop_details=SimpleNamespace(category="cyber"))
+    )
+    assert await analyze_article(_article(), client, SETTINGS) is None
+
+
+async def test_analyze_article_max_tokens_returns_none():
+    client = _client(_response(None, stop_reason="max_tokens"))
+    assert await analyze_article(_article(), client, SETTINGS) is None
+
+
+async def test_analyze_article_api_error_returns_none():
+    client = _client(APIConnectionError(request=httpx.Request("POST", "https://api.anthropic.com")))
+    assert await analyze_article(_article(), client, SETTINGS) is None
+
+
+def test_is_arxiv():
+    assert is_arxiv(_article(url="https://arxiv.org/abs/2601.00001"))
+    assert is_arxiv(_article(url="https://arxiv.org/pdf/2601.00001"))
+    assert not is_arxiv(_article(url="https://example.com/arxiv-like"))
+
+
+class FakeGemini:
+    def __init__(self, fail: bool = False):
+        self.fail = fail
+        self.questions: list[str] = []
+
+    async def generate_text(self, prompt, system):  # noqa: ARG002 - protocol signature
+        if self.fail:
+            raise GeminiError("down")
+        self.questions.append(prompt.split("\n", 1)[0])
+        return "answer from paper"
+
+
+async def test_minions_flow_decompose_extract_synthesize():
+    client = _client(
+        _response(Questions(questions=["Q1?", "Q2?", "Q3?", "Q4?", "Q5?", "Q6?"])),
+        _response(ANALYSIS),
+    )
+    gemini = FakeGemini()
+
+    result = await analyze_article_minions(
+        _article(url="https://arxiv.org/abs/1"), client, gemini, SETTINGS
     )
 
-    content_block = MagicMock(type="text")
-    content_block.text = "Not valid JSON"
-    response = MagicMock()
-    response.content = [content_block]
-
-    client = AsyncMock()
-    client.messages.create = AsyncMock(return_value=response)
-
-    result = await analyze_article(article, client=client)
-    assert result is None
-
-
-async def test_analyze_article_api_error():
-    """API errors return None without crashing."""
-    article = Article(
-        url="https://example.com/err", title="Err", content="content", status="triaged", tier="high"
-    )
-
-    client = AsyncMock()
-    client.messages.create = AsyncMock(side_effect=Exception("API timeout"))
-
-    result = await analyze_article(article, client=client)
-    assert result is None
-
-
-async def test_analyze_article_no_api_key():
-    """Missing API key returns None."""
-    article = Article(
-        url="https://example.com/nokey",
-        title="No Key",
-        content="content",
-        status="triaged",
-        tier="high",
-    )
-
-    mock_settings = MagicMock()
-    mock_settings.anthropic_api_key = None
-
-    with patch("feed_brain.services.analyzer.get_settings", return_value=mock_settings):
-        result = await analyze_article(article, client=None)
-    assert result is None
-
-
-# --- Minions protocol tests ---
-
-
-def _mock_ollama_response(text: str) -> MagicMock:
-    """Create a mock Ollama chat response."""
-    response = MagicMock()
-    response.message = MagicMock()
-    response.message.content = text
-    return response
-
-
-async def test_is_arxiv_detects_abs_url():
-    """arXiv /abs/ URL is detected."""
-    article = Article(
-        url="https://arxiv.org/abs/2401.12345",
-        title="Paper",
-        content="content",
-        status="triaged",
-        tier="high",
-    )
-    assert _is_arxiv(article) is True
-
-
-async def test_is_arxiv_detects_pdf_url():
-    """arXiv /pdf/ URL is detected."""
-    article = Article(
-        url="https://arxiv.org/pdf/2401.12345",
-        title="Paper",
-        content="content",
-        status="triaged",
-        tier="high",
-    )
-    assert _is_arxiv(article) is True
-
-
-async def test_is_arxiv_rejects_regular_url():
-    """Non-arXiv URL is not detected as arXiv."""
-    article = Article(
-        url="https://example.com/article",
-        title="Article",
-        content="content",
-        status="triaged",
-        tier="high",
-    )
-    assert _is_arxiv(article) is False
-
-
-async def test_decompose_returns_questions():
-    """Sonnet response with JSON array of questions is parsed correctly."""
-    questions = [
-        "What is the main contribution?",
-        "What methodology is used?",
-        "What are the key results?",
+    assert result == ANALYSIS
+    assert gemini.questions == [
+        "Question: Q1?",
+        "Question: Q2?",
+        "Question: Q3?",
+        "Question: Q4?",
+        "Question: Q5?",
     ]
-    client = AsyncMock()
-    client.messages.create = AsyncMock(return_value=_mock_anthropic_response(questions))
-
-    result = await _decompose("Paper Title", "Abstract text", client, "claude-sonnet-4-6")
-
-    assert result == questions
-    assert len(result) == 3
+    first, second = client.beta.messages.parse.call_args_list
+    assert first.kwargs["output_format"] is Questions
+    assert second.kwargs["output_format"] is DeepAnalysis
+    assert "Q: Q1?\nA: answer from paper" in second.kwargs["messages"][0]["content"]
 
 
-async def test_decompose_caps_at_five():
-    """If Sonnet returns more than 5 questions, only 5 are used."""
-    questions = [f"Question {i}?" for i in range(7)]
-    client = AsyncMock()
-    client.messages.create = AsyncMock(return_value=_mock_anthropic_response(questions))
-
-    result = await _decompose("Paper Title", "Abstract text", client, "claude-sonnet-4-6")
-
-    assert len(result) == 5
-
-
-async def test_extract_answer_calls_ollama():
-    """Ollama response text is returned as the answer."""
-    ollama_client = AsyncMock()
-    ollama_client.chat = AsyncMock(
-        return_value=_mock_ollama_response("The main contribution is X.")
+async def test_deep_analyze_falls_back_to_direct_when_minions_fails():
+    client = _client(_response(Questions(questions=["Q1?"])), _response(ANALYSIS))
+    result = await deep_analyze(
+        _article(url="https://arxiv.org/abs/1"), client, FakeGemini(fail=True), SETTINGS
     )
+    assert result == ANALYSIS
+    assert client.beta.messages.parse.call_args.kwargs["output_format"] is DeepAnalysis
 
-    result = await _extract_answer(
-        "What is the main contribution?",
-        "Full paper content here...",
-        ollama_client,
-        "qwen3.5:9b",
+
+async def test_deep_analyze_non_arxiv_goes_direct():
+    client = _client(_response(ANALYSIS))
+    assert await deep_analyze(_article(), client, FakeGemini(), SETTINGS) == ANALYSIS
+    assert client.beta.messages.parse.await_count == 1
+
+
+def test_apply_analysis_sets_fields_and_status():
+    article = _article()
+    apply_analysis(article, ANALYSIS)
+    assert article.deep_summary == "Sintesi."
+    assert article.deep_insights == '["a", "b"]'
+    assert article.money_quote == "Quote."
+    assert article.actionables == '["Prova X"]'
+    assert article.status == ArticleStatus.ANALYZED
+
+
+async def test_analyze_article_truncated_json_returns_none():
+    """parse() raises ValidationError on JSON cut at max_tokens; analysis returns None."""
+    from pydantic import ValidationError
+
+    try:
+        DeepAnalysis.model_validate_json('{"summary": "trunc')
+    except ValidationError as e:
+        error = e
+    client = _client(error)
+    assert await analyze_article(_article(), client, SETTINGS) is None
+
+
+async def test_minions_without_questions_returns_none():
+    for decomposed in (_response(None, stop_reason="refusal"), _response(Questions(questions=[]))):
+        client = _client(decomposed)
+        gemini = FakeGemini()
+        result = await analyze_article_minions(
+            _article(url="https://arxiv.org/abs/1"), client, gemini, SETTINGS
+        )
+        assert result is None
+        assert gemini.questions == []
+
+
+async def test_deep_analyze_arxiv_without_gemini_goes_direct():
+    client = _client(_response(ANALYSIS))
+    assert (
+        await deep_analyze(_article(url="https://arxiv.org/abs/1"), client, None, SETTINGS)
+        == ANALYSIS
     )
-
-    assert result == "The main contribution is X."
-    ollama_client.chat.assert_called_once()
+    assert client.beta.messages.parse.call_args.kwargs["output_format"] is DeepAnalysis
 
 
-async def test_synthesize_returns_deep_analysis():
-    """Sonnet synthesizes Q&A pairs into DeepAnalysis."""
-    analysis_data = {
-        "summary": "This paper presents a novel approach to X.",
-        "insights": ["Key insight about methodology", "Surprising finding"],
-        "money_quote": "Our results demonstrate a 40% improvement.",
-        "actionables": ["Apply technique X to Y", "Consider approach Z"],
-    }
-    client = AsyncMock()
-    client.messages.create = AsyncMock(return_value=_mock_anthropic_response(analysis_data))
+def test_make_client_requires_key():
+    from pydantic import SecretStr
 
-    qa_pairs = [
-        ("What is the main contribution?", "The paper proposes X."),
-        ("What are the results?", "40% improvement over baseline."),
-    ]
+    from feed_brain.services.analyzer import make_client
 
-    result = await _synthesize("Paper Title", qa_pairs, client, "claude-sonnet-4-6")
-
-    assert result is not None
-    assert "novel approach" in result.summary
-    assert len(result.insights) == 2
-    assert result.money_quote == "Our results demonstrate a 40% improvement."
-    assert len(result.actionables) == 2
+    assert make_client(Settings(_env_file=None, anthropic_api_key=None)) is None
+    assert make_client(Settings(_env_file=None, anthropic_api_key=SecretStr("sk-test"))) is not None
 
 
-async def test_analyze_article_minions_full_flow():
-    """Full Minions flow: decompose, extract answers, synthesize into DeepAnalysis."""
-    article = Article(
-        url="https://arxiv.org/abs/2401.99999",
-        title="Attention Is All You Need (Again)",
-        content="A" * 10000,  # Long paper content
-        status="triaged",
-        tier="high",
+async def test_analysis_output_is_cleaned_of_control_chars():
+    dirty = DeepAnalysis(
+        summary="a\x00b", insights=["c\x01"], money_quote="q\x00", actionables=["d\x7f"]
     )
-
-    questions = ["What is the contribution?", "What are the results?"]
-    analysis_data = {
-        "summary": "Novel transformer variant achieves state-of-the-art.",
-        "insights": ["Efficiency improvement"],
-        "money_quote": "We achieve 95% accuracy.",
-        "actionables": ["Try the new attention mechanism"],
-    }
-
-    anthropic_client = AsyncMock()
-    # First call: decompose (returns questions), second call: synthesize (returns analysis)
-    anthropic_client.messages.create = AsyncMock(
-        side_effect=[
-            _mock_anthropic_response(questions),
-            _mock_anthropic_response(analysis_data),
-        ]
-    )
-
-    ollama_client = AsyncMock()
-    ollama_client.chat = AsyncMock(
-        side_effect=[
-            _mock_ollama_response("The contribution is a new transformer."),
-            _mock_ollama_response("Results show 95% accuracy."),
-        ]
-    )
-
-    result = await analyze_article_minions(
-        article,
-        anthropic_client=anthropic_client,
-        ollama_client=ollama_client,
-    )
-
-    assert result is not None
-    assert "transformer" in result.summary.lower()
-    # decompose + synthesize = 2 Anthropic calls
-    assert anthropic_client.messages.create.call_count == 2
-    # 2 questions = 2 Ollama calls
-    assert ollama_client.chat.call_count == 2
-
-
-async def test_analyze_article_minions_fallback_on_decompose_failure():
-    """If decompose fails, analyze_article_minions returns None."""
-    article = Article(
-        url="https://arxiv.org/abs/2401.99999",
-        title="Paper",
-        content="Content",
-        status="triaged",
-        tier="high",
-    )
-
-    anthropic_client = AsyncMock()
-    anthropic_client.messages.create = AsyncMock(side_effect=Exception("API error"))
-
-    ollama_client = AsyncMock()
-
-    result = await analyze_article_minions(
-        article,
-        anthropic_client=anthropic_client,
-        ollama_client=ollama_client,
-    )
-
-    assert result is None
-
-
-async def test_analyze_article_minions_fallback_on_extract_failure():
-    """If Ollama extraction fails, analyze_article_minions returns None."""
-    article = Article(
-        url="https://arxiv.org/abs/2401.99999",
-        title="Paper",
-        content="Content",
-        status="triaged",
-        tier="high",
-    )
-
-    questions = ["What is the contribution?"]
-
-    anthropic_client = AsyncMock()
-    anthropic_client.messages.create = AsyncMock(return_value=_mock_anthropic_response(questions))
-
-    ollama_client = AsyncMock()
-    ollama_client.chat = AsyncMock(side_effect=Exception("Ollama timeout"))
-
-    result = await analyze_article_minions(
-        article,
-        anthropic_client=anthropic_client,
-        ollama_client=ollama_client,
-    )
-
-    assert result is None
+    client = _client(_response(dirty))
+    result = await analyze_article(_article(), client, SETTINGS)
+    assert result == DeepAnalysis(summary="ab", insights=["c"], money_quote="q", actionables=["d"])

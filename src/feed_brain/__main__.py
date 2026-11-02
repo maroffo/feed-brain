@@ -1,5 +1,5 @@
 # ABOUTME: CLI entry point for feed-brain with full pipeline commands.
-# ABOUTME: Supports migrate, fetch, triage, analyze, integrate, run, list, reset, import-opml.
+# ABOUTME: Commands: migrate, fetch, triage, collect, run, analyze, integrate, list, reset, import-opml.
 
 import argparse
 import asyncio
@@ -56,7 +56,7 @@ async def _run_fetch() -> None:
 
 
 def cmd_triage(_args: argparse.Namespace) -> None:
-    """Triage unclassified articles with Ollama."""
+    """Triage new articles with Gemini."""
     asyncio.run(_run_triage())
 
 
@@ -70,17 +70,40 @@ async def _run_triage() -> None:
         await _shutdown()
 
 
-def cmd_analyze(_args: argparse.Namespace) -> None:
-    """Run deep analysis on high-tier articles."""
-    asyncio.run(_run_analyze())
+def cmd_analyze(args: argparse.Namespace) -> None:
+    """Deep-analyze one article with Opus (the bulletin does this for top stories)."""
+    asyncio.run(_run_analyze(args.article_id))
 
 
-async def _run_analyze() -> None:
+async def _run_analyze(article_id: int) -> None:
     try:
-        from feed_brain.services.analyzer import analyze_high_tier
+        from feed_brain.ai.gemini import Gemini, GeminiError
+        from feed_brain.db.models import Article
+        from feed_brain.db.session import get_session_factory
+        from feed_brain.services.analyzer import (
+            apply_analysis,
+            deep_analyze,
+            is_arxiv,
+            make_client,
+        )
 
-        analyzed = await analyze_high_tier()
-        log.info("analyze_done", analyzed=analyzed)
+        client = make_client()
+        if client is None:
+            sys.exit("ANTHROPIC_API_KEY is not set")
+        async with get_session_factory()() as session:
+            article = await session.get(Article, article_id)
+            if article is None:
+                sys.exit(f"No article with id {article_id}")
+            try:
+                gemini = Gemini() if is_arxiv(article) else None
+            except GeminiError as e:
+                sys.exit(str(e))
+            analysis = await deep_analyze(article, client, gemini)
+            if analysis is None:
+                sys.exit("Analysis failed (see log)")
+            apply_analysis(article, analysis)
+            await session.commit()
+        print(analysis.model_dump_json(indent=2))
     finally:
         await _shutdown()
 
@@ -100,166 +123,33 @@ async def _run_integrate() -> None:
         await _shutdown()
 
 
+def cmd_collect(_args: argparse.Namespace) -> None:
+    """Fetch all feeds, then triage the new articles."""
+    asyncio.run(_run_collect())
+
+
+async def _run_collect() -> None:
+    try:
+        await _collect()
+    finally:
+        await _shutdown()
+
+
+async def _collect() -> None:
+    from feed_brain.services.fetcher import fetch_all_feeds
+    from feed_brain.services.triage import triage_new_articles
+
+    new = await fetch_all_feeds()
+    triaged = await triage_new_articles()
+    log.info("collect_done", new_articles=new, triaged=triaged)
+
+
 def cmd_run(_args: argparse.Namespace) -> None:
-    """Full pipeline: fetch → triage → analyze → integrate."""
+    """Scheduled entry point: migrate, then collect."""
     from feed_brain.db.migrate import upgrade_head
 
     upgrade_head()
-    asyncio.run(_run_pipeline())
-
-
-async def _run_pipeline() -> None:
-    import json
-    from datetime import UTC, datetime
-
-    from anthropic import AsyncAnthropic
-    from ollama import AsyncClient
-    from sqlalchemy import select
-
-    try:
-        from feed_brain.config import get_settings
-        from feed_brain.db.models import Article
-        from feed_brain.db.session import get_session_factory
-        from feed_brain.models import ArticleStatus, Tier
-        from feed_brain.services.analyzer import (
-            _is_arxiv,
-            analyze_article,
-            analyze_article_minions,
-        )
-        from feed_brain.services.fetcher import fetch_all_feeds
-        from feed_brain.services.integrator import integrate_article
-        from feed_brain.services.triage import TriageParseError, triage_article
-
-        settings = get_settings()
-
-        # Step 1: Fetch (batch, fast)
-        new = await fetch_all_feeds()
-        log.info("pipeline_fetch_done", new_articles=new)
-
-        # Set up clients once
-        ollama_client = AsyncClient(host=settings.ollama_host)
-        anthropic_client = None
-        if settings.anthropic_api_key:
-            anthropic_client = AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value())
-
-        # Step 2: Process each article through the full pipeline
-        session_factory = get_session_factory()
-        triaged = 0
-        analyzed = 0
-        integrated = 0
-
-        async with session_factory() as session:
-            result = await session.execute(
-                select(Article).where(
-                    Article.status == ArticleStatus.NEW,
-                    Article.content.isnot(None),
-                )
-            )
-            articles = result.scalars().all()
-
-            total = len(articles)
-            errors = 0
-
-            for i, article in enumerate(articles, 1):
-                progress = f"[{i}/{total}]"
-
-                # Triage
-                try:
-                    triage = await triage_article(article, client=ollama_client, settings=settings)
-                except TriageParseError:
-                    log.error("triage_failed", progress=progress, title=article.title[:60])
-                    article.status = ArticleStatus.ERROR
-                    errors += 1
-                    await session.commit()
-                    continue
-
-                if not triage:
-                    article.status = ArticleStatus.ERROR
-                    errors += 1
-                    await session.commit()
-                    continue
-
-                article.summary = triage.summary
-                article.tier = triage.tier.value
-                article.category = triage.category.value
-                article.reason = triage.reason
-                article.confidence = triage.confidence
-                article.classified_at = datetime.now(UTC)
-                article.status = ArticleStatus.TRIAGED
-                triaged += 1
-                await session.commit()
-
-                tier_str = triage.tier.value.upper()
-                conf_str = f"{triage.confidence:.0%}"
-                log.info(
-                    "triaged",
-                    progress=progress,
-                    tier=tier_str,
-                    confidence=conf_str,
-                    title=article.title[:60],
-                )
-
-                # Analyze (high-tier only)
-                if article.tier == Tier.HIGH and anthropic_client:
-                    analysis = None
-                    method = "direct"
-
-                    if _is_arxiv(article):
-                        method = "minions"
-                        analysis = await analyze_article_minions(
-                            article,
-                            anthropic_client=anthropic_client,
-                            ollama_client=ollama_client,
-                        )
-
-                    if analysis is None:
-                        method = "direct"
-                        analysis = await analyze_article(article, client=anthropic_client)
-
-                    if analysis:
-                        article.deep_summary = analysis.summary
-                        article.deep_insights = json.dumps(analysis.insights)
-                        article.money_quote = analysis.money_quote
-                        article.actionables = json.dumps(analysis.actionables)
-                        article.status = ArticleStatus.ANALYZED
-                        analyzed += 1
-                        await session.commit()
-
-                        log.info(
-                            "analyzed",
-                            progress=progress,
-                            method=method,
-                            title=article.title[:60],
-                        )
-
-                # Integrate (high-tier with sufficient confidence)
-                confidence = article.confidence or 0.0
-                if article.tier == Tier.HIGH and confidence >= settings.auto_threshold:
-                    target = integrate_article(article, settings)
-                    if target:
-                        article.integrated_at = datetime.now(UTC)
-                        article.integration_target = target
-                        article.status = ArticleStatus.INTEGRATED
-                        integrated += 1
-                        await session.commit()
-
-                        log.info(
-                            "integrated",
-                            progress=progress,
-                            target=target,
-                            title=article.title[:60],
-                        )
-
-        log.info(
-            "pipeline_done",
-            total=total,
-            triaged=triaged,
-            analyzed=analyzed,
-            integrated=integrated,
-            errors=errors,
-        )
-    finally:
-        await _shutdown()
+    asyncio.run(_run_collect())
 
 
 def cmd_list(args: argparse.Namespace) -> None:
@@ -396,16 +286,20 @@ def main() -> None:
     subparsers.add_parser("fetch", help="Fetch new articles from all feeds")
 
     # triage
-    subparsers.add_parser("triage", help="Triage unclassified articles with Ollama")
+    subparsers.add_parser("triage", help="Triage new articles with Gemini")
 
     # analyze
-    subparsers.add_parser("analyze", help="Deep analysis on high-tier articles")
+    analyze_parser = subparsers.add_parser("analyze", help="Deep-analyze one article with Opus")
+    analyze_parser.add_argument("--article-id", type=int, required=True, help="Article id")
 
     # integrate
     subparsers.add_parser("integrate", help="Push high-tier articles to Second Brain")
 
+    # collect
+    subparsers.add_parser("collect", help="Fetch feeds and triage new articles")
+
     # run
-    subparsers.add_parser("run", help="Full pipeline: fetch→triage→analyze→integrate")
+    subparsers.add_parser("run", help="Scheduled entry point: migrate, then collect")
 
     # list
     list_parser = subparsers.add_parser("list", help="List recent articles")
@@ -427,6 +321,7 @@ def main() -> None:
         "triage": cmd_triage,
         "analyze": cmd_analyze,
         "integrate": cmd_integrate,
+        "collect": cmd_collect,
         "run": cmd_run,
         "list": cmd_list,
         "reset": cmd_reset,

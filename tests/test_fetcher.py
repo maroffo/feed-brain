@@ -124,3 +124,32 @@ async def test_fetch_handles_bozo_feed():
 
     assert result.error is not None
     assert len(result.articles) == 0
+
+
+async def test_fetch_falls_back_to_entry_summary_when_extraction_fails():
+    """Feeds whose pages can't be extracted (ransomfeed, cvefeed) keep the entry summary as text."""
+    source = FeedSource(id=1, name="Ransom Feed", url="https://ransomfeed.example/rss")
+    entry = _make_feed_entry(url="https://ransomfeed.example/v/1")
+    entry.summary = "<p>LockBit claims <b>Acme SpA</b> (Italy)</p>"
+    no_summary = _make_feed_entry(url="https://ransomfeed.example/v/2")
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=_mock_httpx_response())
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch("feed_brain.services.fetcher.httpx.AsyncClient", return_value=mock_client),
+        patch(
+            "feed_brain.services.fetcher.feedparser.parse",
+            return_value=_make_parsed_feed([entry, no_summary]),
+        ),
+        patch(
+            "feed_brain.services.fetcher.extract_content", new_callable=AsyncMock, return_value=None
+        ),
+    ):
+        result = await _fetch_single_feed(source, MockSettings(), existing_urls=set())
+
+    contents = {a.url: a.content for a in result.articles}
+    assert contents["https://ransomfeed.example/v/1"] == "LockBit claims Acme SpA (Italy)"
+    assert contents["https://ransomfeed.example/v/2"] is None

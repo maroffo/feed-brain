@@ -33,4 +33,5 @@ Thumbs.db
 uv.lock
 
 # Quality reports
-quality_reports/
+quality_reports/*
+!quality_reports/approvals/

@@ -1,9 +1,10 @@
 # ABOUTME: Pydantic schemas for data validation and serialization.
-# ABOUTME: Defines triage output, deep analysis, category mapping, and article status.
+# ABOUTME: Defines tiers, bulletin sections, vault categories, triage and deep-analysis outputs.
 
+from datetime import date
 from enum import StrEnum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Tier(StrEnum):
@@ -24,6 +25,39 @@ class Category(StrEnum):
     HEALTH_SCIENCE = "health_science"
 
 
+class Section(StrEnum):
+    """Bulletin sections, derived from the OPML folders (plan Appendix A)."""
+
+    SECURITY = "security"
+    THREAT_RADAR = "threat_radar"
+    AI = "ai"
+    TECH = "tech"
+    CLOUD_DEVOPS = "cloud_devops"
+    SOFTWARE = "software"
+    MANAGEMENT = "management"
+    RESEARCH = "research"
+    POLITICS = "politics"
+    ECONOMY = "economy"
+    CULTURE = "culture"
+    SPORT = "sport"
+
+
+SECTION_TITLES: dict[Section, str] = {
+    Section.SECURITY: "Sicurezza",
+    Section.THREAT_RADAR: "Radar minacce",
+    Section.AI: "AI e agenti",
+    Section.TECH: "Tecnologia",
+    Section.CLOUD_DEVOPS: "Cloud e DevOps",
+    Section.SOFTWARE: "Ingegneria del software",
+    Section.MANAGEMENT: "Management e agile",
+    Section.RESEARCH: "Ricerca",
+    Section.POLITICS: "Politica, Europa e giustizia",
+    Section.ECONOMY: "Economia",
+    Section.CULTURE: "Cultura, idee e blog",
+    Section.SPORT: "Sport",
+}
+
+
 class ArticleStatus(StrEnum):
     NEW = "new"
     TRIAGED = "triaged"
@@ -33,11 +67,12 @@ class ArticleStatus(StrEnum):
 
 
 class TriageResult(BaseModel):
-    """Flat output from Ollama triage."""
+    """Flat output from Gemini triage."""
 
     tier: Tier
+    section: Section
     category: Category
-    confidence: float
+    confidence: float = Field(ge=0.0, le=1.0)
     summary: str
     reason: str
 
@@ -49,6 +84,68 @@ class DeepAnalysis(BaseModel):
     insights: list[str]
     money_quote: str
     actionables: list[str]
+
+
+class SourceRef(BaseModel):
+    """One article backing a story, as cited in the bulletin."""
+
+    name: str
+    title: str
+    url: str
+
+
+class TopStory(BaseModel):
+    title: str
+    text: str
+    section: Section
+    sources: list[SourceRef]
+    analysis: DeepAnalysis | None = None
+
+
+class BriefItem(BaseModel):
+    headline: str
+    summary: str
+    sources: list[SourceRef]
+
+
+class SectionBlock(BaseModel):
+    key: Section
+    title: str
+    items: list[BriefItem]
+
+
+class RadarItem(BaseModel):
+    title: str
+    url: str
+    source: str
+
+
+class BulletinData(BaseModel):
+    """Self-contained daily issue: everything render and weekly need, no DB joins."""
+
+    issue_date: date
+    title: str
+    subtitle: str
+    editorial: str
+    top_stories: list[TopStory]
+    sections: list[SectionBlock]
+    radar: list[RadarItem]
+    articles_count: int
+
+
+class WrittenStory(BaseModel):
+    index: int
+    title: str
+    text: str
+
+
+class BulletinDraft(BaseModel):
+    """Gemini writer output for the top of the bulletin."""
+
+    title: str
+    subtitle: str
+    editorial: str
+    top_stories: list[WrittenStory]
 
 
 class FeedSourceCreate(BaseModel):
