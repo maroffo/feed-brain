@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 from readability import Document
 
 from feed_brain.config import Settings, get_settings
+from feed_brain.services import http
 from feed_brain.services.pdf import extract_pdf, is_pdf_url
 
 log = structlog.get_logger()
@@ -97,15 +98,7 @@ async def extract_content(url: str, settings: Settings | None = None) -> str | N
         return await extract_pdf(url, settings)
 
     try:
-        async with httpx.AsyncClient(
-            timeout=settings.feed_timeout,
-            headers={"User-Agent": settings.feed_user_agent},
-            follow_redirects=True,
-        ) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-
-        html = response.text
+        html = (await http.fetch(url, settings)).text
 
         # Try readability-lxml first (CPU-bound, offload to thread)
         cleaned = await asyncio.to_thread(_extract_with_readability, html)

@@ -1,5 +1,5 @@
 # ABOUTME: Concurrent RSS feed fetcher with age cutoff and volume control.
-# ABOUTME: Fetches feeds concurrently, writes to DB sequentially (SQLite single-writer).
+# ABOUTME: Fetches feeds concurrently, then writes new articles in a single session.
 
 import asyncio
 import contextlib
@@ -9,12 +9,15 @@ from datetime import UTC, datetime, timedelta
 import feedparser
 import httpx
 import structlog
+from bs4 import BeautifulSoup
 from sqlalchemy import select
 
 from feed_brain.config import Settings, get_settings
 from feed_brain.db.models import Article, FeedSource
 from feed_brain.db.session import get_session_factory
+from feed_brain.services import http
 from feed_brain.services.extractor import extract_content
+from feed_brain.textutil import clean_text
 
 log = structlog.get_logger()
 
@@ -44,7 +47,7 @@ async def fetch_all_feeds() -> int:
     """Fetch articles from all active feed sources concurrently.
 
     HTTP fetching and content extraction run in parallel.
-    DB writes are serialized to avoid SQLite locking.
+    DB writes happen afterwards in one session (one AsyncSession is not task-safe).
     Returns the number of new articles stored.
     """
     settings = get_settings()
@@ -76,14 +79,14 @@ async def fetch_all_feeds() -> int:
     # Collect all articles from successful fetches
     all_articles: list[FetchedArticle] = []
     for i, r in enumerate(results):
-        if isinstance(r, Exception):
+        if isinstance(r, BaseException):
             log.error("feed_fetch_exception", name=sources[i].name, error=str(r))
         elif r.error:
             pass  # Already logged in _fetch_single_feed
         else:
             all_articles.extend(r.articles)
 
-    # Write all articles to DB sequentially (SQLite single-writer)
+    # Write all articles in one session
     total_new = 0
     if all_articles:
         async with session_factory() as session:
@@ -97,10 +100,10 @@ async def fetch_all_feeds() -> int:
 
                 article = Article(
                     url=fetched.url,
-                    title=fetched.title,
-                    author=fetched.author,
+                    title=clean_text(fetched.title) or "Untitled",
+                    author=clean_text(fetched.author),
                     source_id=fetched.source_id,
-                    content=fetched.content,
+                    content=clean_text(fetched.content),
                     published_date=fetched.published_date,
                     status="new",
                     fetched_at=datetime.now(UTC),
@@ -114,6 +117,15 @@ async def fetch_all_feeds() -> int:
     return total_new
 
 
+def _entry_text(entry: object) -> str | None:
+    """Plain text of the feed entry's summary, for pages that can't be extracted."""
+    summary = getattr(entry, "summary", None)
+    if not summary:
+        return None
+    text = BeautifulSoup(summary, "html.parser").get_text(" ", strip=True)
+    return " ".join(text.split()) or None
+
+
 async def _fetch_single_feed(
     source: FeedSource, settings: Settings, existing_urls: set[str]
 ) -> FeedResult:
@@ -122,14 +134,7 @@ async def _fetch_single_feed(
     result = FeedResult(source_name=source.name)
 
     try:
-        async with httpx.AsyncClient(
-            timeout=settings.feed_timeout,
-            headers={"User-Agent": settings.feed_user_agent},
-            follow_redirects=True,
-        ) as client:
-            response = await client.get(source.url)
-            response.raise_for_status()
-            xml_content = response.text
+        xml_content = (await http.fetch(source.url, settings)).text
     except httpx.HTTPError as e:
         log.error("feed_download_error", name=source.name, error=str(e))
         result.error = str(e)
@@ -162,8 +167,8 @@ async def _fetch_single_feed(
         if published_date and published_date < cutoff:
             continue
 
-        # Extract content (I/O-bound, runs concurrently)
-        content = await extract_content(url, settings)
+        # Extract content (I/O-bound, runs concurrently); fall back to the feed's own summary
+        content = await extract_content(url, settings) or _entry_text(entry)
 
         # Track URL to avoid cross-feed duplicates within this batch
         existing_urls.add(url)

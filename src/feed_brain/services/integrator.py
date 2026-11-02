@@ -1,4 +1,4 @@
-# ABOUTME: Second Brain integrator that appends articles to centralized vault topic files.
+# ABOUTME: Second Brain entries: built in the cloud (outbox payload), appended locally with URL dedup.
 # ABOUTME: Uses what/why table format, logs to Timeline, enables blog-writer and knowledge-sync signals.
 
 import json
@@ -23,22 +23,26 @@ log = structlog.get_logger()
 TIMELINE_FILE = "Second Brain - Timeline"
 
 
+def topic_for(category: str | None) -> str:
+    """Second Brain topic note (without .md) for a triage category; unknown → Development."""
+    try:
+        cat = Category(category) if category else Category.DEVELOPMENT
+    except ValueError:
+        cat = Category.DEVELOPMENT
+    return CATEGORY_VAULT_MAP.get(cat, "Second Brain - Development")
+
+
 def _resolve_topic_file(category: str | None, vault_path: Path) -> tuple[str, Path]:
     """Resolve the topic filename and full path for a category.
 
     Returns (topic_filename, full_path) tuple.
     """
-    try:
-        cat = Category(category) if category else Category.DEVELOPMENT
-    except ValueError:
-        cat = Category.DEVELOPMENT
-
-    topic_name = CATEGORY_VAULT_MAP.get(cat, "Second Brain - Development")
+    topic_name = topic_for(category)
     vault_path.mkdir(parents=True, exist_ok=True)
     return topic_name, vault_path / f"{topic_name}.md"
 
 
-def _build_entry(article: Article) -> str:
+def build_entry(article: Article) -> str:
     """Build a Second Brain entry in the what/why table format.
 
     Matches the content template used by process-clippings and newsletter-digest.
@@ -97,44 +101,61 @@ def _build_entry(article: Article) -> str:
     return "\n".join(parts)
 
 
-def _build_timeline_entry(article: Article, topic_name: str) -> str:
+def build_timeline_entry(article: Article, topic_name: str) -> str:
     """Build a Timeline log entry."""
     today = datetime.now(UTC).strftime("%Y-%m-%d")
     title = article.title or "Untitled"
     return f"- **{today}** | [{title}] | Source: feed-brain | -> {topic_name}.md"
 
 
-def _append_to_file(filepath: Path, content: str) -> bool:
-    """Append content to a file, creating it if it doesn't exist."""
-    try:
-        filepath.parent.mkdir(parents=True, exist_ok=True)
-        with filepath.open("a", encoding="utf-8") as f:
-            f.write(content)
-        return True
-    except OSError as e:
-        log.error("file_append_error", path=str(filepath), error=str(e))
+VAULT_TOPICS = frozenset(CATEGORY_VAULT_MAP.values())
+
+
+def _append_to_file(filepath: Path, content: str) -> None:
+    """Append content to a file, creating it if needed. OSError propagates to the caller."""
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+    with filepath.open("a", encoding="utf-8") as f:
+        f.write(content)
+
+
+def append_entry(vault_path: Path, topic: str, url: str, entry: str, timeline: str) -> bool:
+    """Append an entry to `<vault>/<topic>.md` and the Timeline, unless the URL is already there.
+
+    Returns True when appended, False when the URL is already linked in the topic note.
+    Raises ValueError for a topic that is not a known Second Brain note (outbox payloads
+    are data, never paths) and OSError when the vault cannot be written.
+    """
+    if topic not in VAULT_TOPICS:
+        raise ValueError(f"unknown vault topic: {topic!r}")
+    topic_path = vault_path / f"{topic}.md"
+    if topic_path.is_file() and f"({url})" in topic_path.read_text(encoding="utf-8"):
+        log.info("vault_entry_duplicate", topic=topic, url=url)
         return False
+    _append_to_file(topic_path, entry)
+    _append_to_file(vault_path / f"{TIMELINE_FILE}.md", timeline + "\n")
+    return True
 
 
 def integrate_article(article: Article, settings: Settings) -> str | None:
     """Integrate a single article into the Second Brain vault.
 
-    Appends to the centralized topic file and logs to Timeline.
-    Returns the topic filename on success, None on failure.
+    Appends to the centralized topic file (skipping URLs already present) and logs to
+    Timeline. Returns the topic filename on success, None on duplicate or write error.
     """
-    vault_path = settings.vault_path
-    topic_name, topic_path = _resolve_topic_file(article.category, vault_path)
-
-    # Build and append the entry
-    entry = _build_entry(article)
-    if not _append_to_file(topic_path, entry):
+    topic_name = topic_for(article.category)
+    try:
+        appended = append_entry(
+            settings.vault_path,
+            topic_name,
+            article.url,
+            build_entry(article),
+            build_timeline_entry(article, topic_name),
+        )
+    except OSError as e:
+        log.error("vault_write_error", topic=topic_name, error=str(e))
         return None
-
-    # Log to Timeline
-    timeline_path = vault_path / f"{TIMELINE_FILE}.md"
-    timeline_entry = _build_timeline_entry(article, topic_name)
-    _append_to_file(timeline_path, timeline_entry + "\n")
-
+    if not appended:
+        return None
     log.info("article_integrated", title=article.title, target=topic_name)
     return topic_name
 

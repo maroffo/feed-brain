@@ -1,0 +1,22 @@
+# ABOUTME: Local Postgres for development and integration tests (port 5433, avoids a local 5432).
+# ABOUTME: Matches the Cloud SQL major version (POSTGRES_15). Set DB_PASSWORD=feedbrain in .env.
+
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: feedbrain
+      POSTGRES_USER: feedbrain
+      POSTGRES_PASSWORD: feedbrain
+    ports:
+      - "5433:5432"
+    volumes:
+      - feedbrain-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U feedbrain"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  feedbrain-pg:

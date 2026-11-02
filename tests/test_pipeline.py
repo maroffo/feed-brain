@@ -1,0 +1,92 @@
+# ABOUTME: Tests for the scheduled daily pipeline: step isolation, dry-run wiring, weekly when due.
+# ABOUTME: Every step is replaced by a recording fake; no DB, network or LLM involved.
+
+from datetime import date
+from types import SimpleNamespace
+
+import pytest
+
+from feed_brain.config import Settings
+from feed_brain.services import pipeline
+from feed_brain.services.storage import LocalStorage
+
+
+@pytest.fixture
+def calls(monkeypatch):
+    log: list[tuple] = []
+
+    async def collect(opml_store, settings):  # noqa: ARG001
+        log.append(("collect", opml_store))
+
+    async def generate_bulletin(issue_date, anthropic=None):  # noqa: ARG001
+        log.append(("bulletin", issue_date))
+        return SimpleNamespace(id=7)
+
+    async def deliver_bulletin(bulletin_id, *, site, outbox, send, record, to, settings):  # noqa: ARG001
+        log.append(("deliver_bulletin", bulletin_id, type(site).__name__, send, record, to))
+
+    async def existing_week_starts(weeks):  # noqa: ARG001
+        return set()
+
+    async def generate_weekly(start):
+        log.append(("weekly", start))
+        return SimpleNamespace(id=3)
+
+    async def deliver_weekly(digest_id, *, site, outbox, send, record, to, settings):  # noqa: ARG001
+        log.append(("deliver_weekly", digest_id, send))
+
+    for name, fn in {
+        "collect": collect,
+        "generate_bulletin": generate_bulletin,
+        "deliver_bulletin": deliver_bulletin,
+        "existing_week_starts": existing_week_starts,
+        "generate_weekly": generate_weekly,
+        "deliver_weekly": deliver_weekly,
+    }.items():
+        monkeypatch.setattr(pipeline, name, fn)
+    monkeypatch.setattr(pipeline, "make_client", lambda: None)
+    return log
+
+
+async def test_dry_run_on_sunday_runs_everything_locally(calls, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    errors = await pipeline.run_daily(
+        today=date(2026, 11, 1), dry_run=True, to=None, settings=Settings(_env_file=None)
+    )
+    assert errors == []
+    assert calls == [
+        ("collect", None),
+        ("bulletin", date(2026, 11, 1)),
+        ("deliver_bulletin", 7, "LocalStorage", False, False, None),
+        ("weekly", date(2026, 10, 26)),
+        ("deliver_weekly", 3, False),
+    ]
+
+
+async def test_failing_step_does_not_stop_the_rest(calls, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+
+    async def boom(opml_store, settings):  # noqa: ARG001
+        raise RuntimeError("feeds down")
+
+    monkeypatch.setattr(pipeline, "collect", boom)
+    errors = await pipeline.run_daily(
+        today=date(2026, 11, 3), dry_run=True, to="me@x.y", settings=Settings(_env_file=None)
+    )
+    assert errors == ["collect"]
+    assert ("deliver_bulletin", 7, "LocalStorage", False, False, "me@x.y") in calls
+    assert ("weekly", date(2026, 10, 26)) in calls  # Tuesday catch-up of last week
+
+
+async def test_real_run_requires_buckets(calls):
+    errors = await pipeline.run_daily(
+        today=date(2026, 11, 3), dry_run=False, to=None, settings=Settings(_env_file=None)
+    )
+    assert errors == ["config"]
+    assert calls == []
+
+
+def test_stores_for_dry_run_are_local(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    site, outbox, opml = pipeline.stores(Settings(_env_file=None), dry_run=True)
+    assert isinstance(site, LocalStorage) and isinstance(outbox, LocalStorage) and opml is None

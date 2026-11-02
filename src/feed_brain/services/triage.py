@@ -1,60 +1,52 @@
-# ABOUTME: Article triage service using Ollama with structured output.
-# ABOUTME: Classifies articles by tier/category/confidence using local LLM.
+# ABOUTME: Article triage with Gemini structured output: tier, bulletin section, vault category.
+# ABOUTME: Runs articles concurrently (semaphore), writes results from one session, retries next run on failure.
 
-import json
-from datetime import UTC, datetime
+import asyncio
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from importlib.resources import files
+from typing import Protocol
 
 import structlog
-from ollama import AsyncClient
-from sqlalchemy import select
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
+from sqlalchemy import select, update
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from feed_brain.config import Settings, get_settings
-from feed_brain.db.models import Article
+from feed_brain.ai.gemini import GeminiError
+from feed_brain.config import get_settings
+from feed_brain.db.models import Article, FeedSource
 from feed_brain.db.session import get_session_factory
-from feed_brain.models import ArticleStatus, Category, Tier, TriageResult
+from feed_brain.models import ArticleStatus, TriageResult
+from feed_brain.textutil import clean_text
 
 log = structlog.get_logger()
 
-SYSTEM_PROMPT = """\
-You are a content classifier for a personal knowledge management system. \
-Classify articles based on the reader's interest profile.
+CONTENT_PREVIEW_CHARS = 3000
 
-## Interest Profile
 
-**High interest (tier: high):**
-- AI agents, context engineering, MCP, memory systems, LLM tooling
-- Claude Code, skills, subagents, hooks, AI-assisted development
-- Go concurrency, architecture patterns, performance
-- Engineering management: productivity frameworks (SPACE, DORA), technical debt strategies
-- DevOps: Kubernetes, Terraform, observability, cloud architecture
+def _load_interests() -> str:
+    """Interest profile from the packaged interests.md, without its ABOUTME header."""
+    text = files("feed_brain").joinpath("interests.md").read_text(encoding="utf-8")
+    return "\n".join(
+        line for line in text.splitlines() if not line.startswith("# ABOUTME:")
+    ).strip()
 
-**Medium interest (tier: medium):**
-- Python tooling, CLI tools, terminal workflows
-- Docker, containers, security hardening
-- Software architecture, API design, distributed systems
-- European politics, Italian politics, geopolitics, trade policy
-- Leadership, team practices, hiring
 
-**Low interest (tier: low):**
-- Basic tutorials, beginner guides
-- Marketing, business strategy (unless novel frameworks)
-- Media, culture, health (unless breakthrough research)
-- Hype pieces, AI doomerism, sales pitches
+SECTIONS_GUIDE = """\
+- security: security news and analysis (breaches, campaigns, vulnerabilities with impact, policy)
+- threat_radar: every single ransomware victim claim and every single CVE entry, whatever the tier (ransomfeed, cvefeed feeds); analysis of a campaign or a breach goes to security
+- ai: AI, LLMs, agents, AI-assisted development, AI policy, from any feed
+- tech: general technology industry news (Ars Technica, The Register, Hacker News, DDay, Macity)
+- cloud_devops: cloud platforms, DevOps, infrastructure, Google Cloud and AWS blogs
+- software: software engineering, architecture, languages, practices (Fowler, InfoQ, DZone)
+- management: management, agile, leadership, project management
+- research: research papers (arXiv) not better placed in ai
+- politics: Italian, European and world politics, justice and prisons
+- economy: economics and public finance
+- culture: culture, essays, personal blogs, science skepticism, music, comics
+- sport: sport"""
 
-## Quality Signals (boost tier)
-- Original analysis with data or experience
-- Actionable frameworks or mental models
-- Practical papers with reproducible results
-- Contrarian views backed by evidence
-
-## Anti-patterns (lower tier)
-- Clickbait, listicles without depth
-- Rehashed news without analysis
-- Product announcements disguised as articles
-- Tutorial-style without novel insight
-
-## Categories
+CATEGORIES_GUIDE = """\
 - ai_agents: AI, LLM, agents, prompts, context engineering, MCP
 - claude_code: Claude Code CLI, skills, subagents, hooks
 - development: Go, Python, Java, CLI, data tools, APIs, libraries
@@ -62,127 +54,158 @@ Classify articles based on the reader's interest profile.
 - engineering_management: Leadership, productivity, team practices, tech debt
 - politics_economics: Politics, economics, geopolitics, EU/IT policy
 - marketing: Marketing, business strategy, growth
-- media_culture: Media, culture, literature, journalism
-- health_science: Health, science, medicine, research
+- media_culture: Media, culture, literature, journalism, sport
+- health_science: Health, science, medicine, research"""
 
-## Output
-Return a JSON object with these exact fields:
-- tier: "high", "medium", or "low"
+SYSTEM_PROMPT = f"""\
+You triage articles from the reader's RSS feeds for a daily Italian news bulletin. \
+For each article decide how interesting it is to the reader (tier), which bulletin \
+section it belongs to, and which knowledge-base category it maps to.
+
+{_load_interests()}
+
+## Sections (pick exactly one)
+Use the feed name and folder as a hint, but judge the article itself: a security \
+story on a general tech site goes to security, an AI paper goes to ai.
+{SECTIONS_GUIDE}
+
+## Categories (pick exactly one, for the reader's knowledge base)
+{CATEGORIES_GUIDE}
+
+## Output fields
+- tier: high, medium or low, from the interest profile
+- section: one of the sections above
 - category: one of the categories above
-- confidence: 0.0 to 1.0
-- summary: 2-3 sentence summary
-- reason: why this tier was assigned
+- confidence: 0.0 to 1.0, how sure you are about the tier
+- summary: 2-3 sentences in Italian on what the article says
+- reason: one sentence in Italian on why this tier fits the reader
 """
 
 
-class TriageParseError(Exception):
-    """Raised when Ollama response fails to parse as TriageResult."""
+class StructuredLLM(Protocol):
+    async def generate(self, prompt: str, system: str, schema: type[TriageResult]) -> TriageResult:
+        """Return the model answer parsed into `schema`."""
+        ...
 
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_fixed(1),
-    retry=retry_if_exception_type(TriageParseError),
-    reraise=True,
-)
-async def triage_article(
-    article: Article, client: AsyncClient | None = None, settings: Settings | None = None
-) -> TriageResult | None:
-    """Triage a single article using Ollama with structured output.
+@dataclass(frozen=True)
+class TriageInput:
+    """Snapshot of what triage needs, so concurrent tasks never touch ORM state."""
 
-    Returns TriageResult or None if triage fails after retries.
-    """
-    settings = settings or get_settings()
-    client = client or AsyncClient(host=settings.ollama_host)
+    article_id: int
+    title: str
+    author: str | None
+    content: str
+    feed_name: str | None
+    folder: str | None
 
-    content_preview = (article.content or "")[:3000]
-    user_message = (
-        f"Title: {article.title}\n"
-        f"Author: {article.author or 'Unknown'}\n\n"
-        f"Content:\n{content_preview}"
+
+async def triage_article(item: TriageInput, gemini: StructuredLLM) -> TriageResult | None:
+    """Triage one article. Returns None if Gemini keeps failing (caller retries next run)."""
+    prompt = (
+        f"Feed: {item.feed_name or 'Unknown'}\n"
+        f"Folder: {item.folder or 'none'}\n"
+        f"Title: {item.title}\n"
+        f"Author: {item.author or 'Unknown'}\n\n"
+        f"Content:\n{item.content[:CONTENT_PREVIEW_CHARS]}"
     )
-
     try:
-        response = await client.chat(
-            model=settings.ollama_model,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_message},
-            ],
-            format=TriageResult.model_json_schema(),
-        )
-
-        text = response.message.content.strip()
-        log.debug("triage_raw_response", text=text[:200])
-
-        data = json.loads(text)
-        result = TriageResult(
-            tier=Tier(data["tier"]),
-            category=Category(data["category"]),
-            confidence=float(data["confidence"]),
-            summary=data["summary"],
-            reason=data["reason"],
-        )
-
-        log.info(
-            "article_triaged",
-            title=article.title,
-            tier=result.tier,
-            category=result.category,
-            confidence=result.confidence,
-        )
-        return result
-
-    except (json.JSONDecodeError, KeyError, ValueError) as e:
-        log.warning("triage_parse_error", title=article.title, error=str(e))
-        raise TriageParseError(str(e)) from e
-    except TriageParseError:
-        raise
-    except Exception as e:
-        log.error("triage_error", title=article.title, error=str(e))
+        return await gemini.generate(prompt, SYSTEM_PROMPT, TriageResult)
+    except GeminiError as e:
+        log.warning("triage_failed", title=item.title[:80], error=str(e))
         return None
 
 
-async def triage_new_articles() -> int:
-    """Triage all articles with status 'new' that have content.
+async def _apply(session: AsyncSession, article_id: int, result: TriageResult) -> None:
+    await session.execute(
+        update(Article)
+        .where(Article.id == article_id)
+        .values(
+            tier=result.tier.value,
+            section=result.section.value,
+            category=result.category.value,
+            confidence=result.confidence,
+            summary=clean_text(result.summary),
+            reason=clean_text(result.reason),
+            classified_at=datetime.now(UTC),
+            status=ArticleStatus.TRIAGED,
+        )
+    )
+    await session.commit()
 
-    Returns the number of articles triaged.
+
+async def triage_new_articles(gemini: StructuredLLM | None = None) -> int:
+    """Triage recent 'new' articles with content. Returns how many were triaged.
+
+    Gemini calls run concurrently (bounded by triage_concurrency) on immutable
+    snapshots; every DB write happens in this coroutine's session, one commit per
+    article. Failed articles (LLM or DB) stay 'new' and are retried on the next run
+    until they age out of the article_max_age_hours window.
     """
     settings = get_settings()
-    client = AsyncClient(host=settings.ollama_host)
-    session_factory = get_session_factory()
+    if gemini is None:
+        from feed_brain.ai.gemini import Gemini
+
+        gemini = Gemini(settings)
+
+    cutoff = datetime.now(UTC) - timedelta(hours=settings.article_max_age_hours)
+    semaphore = asyncio.Semaphore(settings.triage_concurrency)
     triaged = 0
 
-    async with session_factory() as session:
-        result = await session.execute(
-            select(Article).where(
-                Article.status == ArticleStatus.NEW,
-                Article.content.isnot(None),
+    factory = get_session_factory()
+    async with factory() as session:
+        rows = (
+            await session.execute(
+                select(
+                    Article.id,
+                    Article.title,
+                    Article.author,
+                    Article.content,
+                    FeedSource.name,
+                    FeedSource.folder,
+                )
+                .outerjoin(FeedSource, Article.source_id == FeedSource.id)
+                .where(
+                    Article.status == ArticleStatus.NEW,
+                    Article.content.isnot(None),
+                    Article.fetched_at >= cutoff,
+                )
             )
-        )
-        articles = result.scalars().all()
+        ).all()
+    items = [
+        TriageInput(article_id, title, author, content or "", feed_name, folder)
+        for article_id, title, author, content, feed_name, folder in rows
+    ]
 
-        for article in articles:
-            try:
-                triage = await triage_article(article, client=client, settings=settings)
-            except TriageParseError:
-                log.error("triage_failed_after_retries", title=article.title)
-                article.status = ArticleStatus.ERROR
-                continue
+    async def _bounded(item: TriageInput) -> tuple[TriageInput, TriageResult | None]:
+        async with semaphore:
+            return item, await triage_article(item, gemini)
 
-            if triage:
-                article.summary = triage.summary
-                article.tier = triage.tier.value
-                article.category = triage.category.value
-                article.reason = triage.reason
-                article.confidence = triage.confidence
-                article.classified_at = datetime.now(UTC)
-                article.status = ArticleStatus.TRIAGED
+    tasks = [asyncio.create_task(_bounded(item)) for item in items]
+    try:
+        async with factory() as session:
+            for done in asyncio.as_completed(tasks):
+                item, result = await done
+                if result is None:
+                    continue
+                try:
+                    await _apply(session, item.article_id, result)
+                except SQLAlchemyError as e:
+                    await session.rollback()
+                    log.error("triage_store_failed", title=item.title[:80], error=str(e)[:200])
+                    continue
                 triaged += 1
-            else:
-                article.status = ArticleStatus.ERROR
+                log.info(
+                    "article_triaged",
+                    tier=result.tier.value,
+                    section=result.section.value,
+                    confidence=f"{result.confidence:.2f}",
+                    title=item.title[:60],
+                )
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
-            await session.commit()
-
-    log.info("triage_complete", triaged=triaged, total=len(articles))
+    log.info("triage_complete", triaged=triaged, candidates=len(items))
     return triaged

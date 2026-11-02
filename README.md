@@ -1,142 +1,127 @@
 # feed-brain
 
-AI-powered personal feed aggregator that classifies RSS articles by relevance using Claude Haiku, presents them in a clean web UI, and exports approved articles as Obsidian clippings.
-
-## Why
-
-RSS readers show everything. feed-brain shows what matters to *you*. Each article is scored against your interest profile by an LLM, categorized, and summarized. You browse the results, approve what's worth keeping, and it lands in your Obsidian vault as a clipping, ready for your knowledge management workflow.
+A personal RSS digest. Every morning a Cloud Run Job reads the feeds from an OPML file, triages each new article against an interest profile, groups the articles that cover the same story, ranks the stories, writes an Italian bulletin and emails it. A static archive page is published at the same time. On Sunday a weekly recap follows. A small sync on the Mac brings the bulletin, the recap and the best articles into an Obsidian vault.
 
 ## How it works
 
 ```
-RSS Feeds --> Fetch --> Extract (readability) --> Classify (Haiku) --> SQLite
-                                                                        |
-                                                              Web UI (htmx)
-                                                              +------------+
-                                                              | Feed list  |
-                                                              | [High]     |
-                                                              | [Medium]   |
-                                                              | [Low]      |
-                                                              +-----+------+
-                                                                    |
-                                                              Article detail
-                                                              + AI summary
-                                                              + [Approve] [Skip]
-                                                                    |
-                                                              Obsidian Clippings/
+Cloud Scheduler 06:30 Europe/Rome
+  └─ Cloud Run Job `feed-brain run`
+       1. collect   OPML (GCS) → fetch + extract → triage (Gemini Flash: tier, section, vault category)
+       2. bulletin  candidates (last 36h, high/medium + threat radar)
+                    → cluster per section (Gemini) → rank (tier + multi-source boost + confidence)
+                    → deep analysis of the top 10 leads (Claude Opus 5.5, optional)
+                    → write (Gemini) → store → publish page + email + vault outbox
+       3. weekly    on Sunday (or catch-up Mon-Sat) from the week's bulletins
+
+Mac (launchd, hourly)
+  └─ `feed-brain sync-vault`: vault outbox (GCS) → Obsidian topic notes + Digests/, local OPML → GCS
 ```
 
-1. **Fetch**: pulls articles from your RSS feeds using feedparser
-2. **Extract**: strips ads and chrome with readability-lxml, keeps clean text
-3. **Classify**: sends title + content to Claude Haiku, gets back tier (high/medium/low), category, summary, and reasoning
-4. **Browse**: htmx web UI with tier filtering, article cards with badges
-5. **Approve**: thumbs up creates a markdown clipping in your Obsidian vault
+- **Sections**: 12, derived from the OPML folders (security, threat radar, AI, tech, cloud/DevOps, software, management, research, politics, economy, culture, sport). Triage assigns them per article, using feed name and folder as a hint.
+- **Interest profile**: `src/feed_brain/interests.md`, plain Markdown injected into the triage prompt. Edit it to change what counts as high, medium or low.
+- **Ranking**: `score = tier weight (high 2, medium 1) + source boost (2 feeds 0.5, 3 feeds 0.8, 4+ 1.0) + confidence`.
+- **Idempotency**: one bulletin per day (`--force` regenerates); each article is covered once; `published_at` / `sent_at` make job retries safe.
+- **Vault**: the bulletin and recap notes go to `Digests/`; the leads of the top stories (high tier, confidence ≥ 0.8) are appended to the Second Brain topic notes, once per URL.
 
-## Tech stack
+## Stack
 
-- **Python 3.13+** with [uv](https://docs.astral.sh/uv/)
-- **FastAPI** + Jinja2 + **htmx** + Pico CSS (zero build step)
-- **Anthropic SDK** (Claude Haiku for classification, ~$0.001/article)
-- **SQLAlchemy 2.0** + aiosqlite (async SQLite, single file DB)
-- feedparser, readability-lxml, beautifulsoup4, httpx
-- structlog, pydantic-settings, ruff, pytest
+Python 3.13, uv, SQLAlchemy 2 async + asyncpg, Alembic, Postgres 15 (a database on a shared Cloud SQL instance), Gemini (`google-genai`, structured output), Anthropic SDK (Opus 5.5 with server-side refusal fallbacks), Jinja2, AWS SES SMTP, Google Cloud Storage, Terraform.
 
-## Setup
-
-### Prerequisites
-
-- Python 3.13+
-- [uv](https://docs.astral.sh/uv/) package manager
-- An [Anthropic API key](https://console.anthropic.com/)
-
-### Install
+## Local development
 
 ```bash
-git clone https://github.com/maroffo/feed-brain.git
-cd feed-brain
 uv sync
+cp .env.example .env              # GEMINI_API_KEY, optional ANTHROPIC_API_KEY, DB_PASSWORD=feedbrain
+docker compose up -d db           # Postgres 15 on localhost:5433
+uv run feed-brain migrate
+uv run feed-brain import-opml ~/Documents/Feeds.opml
+uv run feed-brain collect         # fetch + triage
+uv run feed-brain bulletin        # writes ./site/bulletins/<date>.html and .md
+uv run feed-brain weekly --week 2026-W45
+uv run feed-brain run --dry-run   # whole day into ./site and ./outbox, no email
 ```
 
-### Configure
+Quality gates (also enforced before commits):
 
 ```bash
-cp .env.example .env
+make check       # ruff, ruff format, ty, unit tests
+make test-e2e    # Alembic + asyncpg integration tests on the docker Postgres
 ```
 
-Edit `.env` and set your API key:
+## Commands
 
-```
-ANTHROPIC_API_KEY=sk-ant-your-key-here
-```
+| Command | What it does |
+|---------|--------------|
+| `run [--dry-run] [--to EMAIL]` | Scheduled entry point: migrate, collect, bulletin, deliver, weekly if due. Non-zero exit if any step failed (the others still run) |
+| `collect` | Sync feeds from the GCS OPML (when `DATA_BUCKET` is set), fetch, triage |
+| `bulletin [--date] [--force] [--out]` | Generate (or reuse) the day's bulletin and render it locally |
+| `weekly [--week YYYY-Www] [--force] [--out]` | Generate the recap for a week (default: the week that is due) |
+| `sync-vault [--outbox DIR] [--vault DIR] [--no-opml]` | Mac side of the vault bridge |
+| `migrate` | Apply Alembic migrations |
+| `analyze --article-id N` | Opus deep analysis of one article |
+| `import-opml FILE [--sync]`, `fetch`, `triage`, `list`, `reset`, `integrate` | Maintenance |
 
-Optional settings:
+## Configuration
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | (required) | Anthropic API key for Haiku classification |
-| `CLASSIFIER_MODEL` | `claude-haiku-4-5-20251001` | Model to use for classification |
-| `DB_PATH` | `./feed_brain.db` | SQLite database file path |
-| `CLIPPINGS_DIR` | `~/...Obsidian.../Clippings` | Where approved clippings are saved |
-| `HOST` | `127.0.0.1` | Server bind address |
-| `PORT` | `8000` | Server port |
-| `LOG_LEVEL` | `INFO` | Logging level |
+All settings come from environment variables (`.env` locally, job spec and Secret Manager in the cloud). The main ones:
 
-## Usage
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `GEMINI_API_KEY` | required | Triage, clustering, writing |
+| `GEMINI_MODEL` | `gemini-3.8-flash` | Gemini model |
+| `ANTHROPIC_API_KEY` | unset | Enables Opus deep analysis of the top stories |
+| `ANALYZER_MODEL` / `ANALYZER_EFFORT` | `claude-opus-5-5` / `high` | Deep analysis model and effort |
+| `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` | local docker | Postgres |
+| `SITE_BUCKET`, `DATA_BUCKET`, `SITE_URL` | unset | Public site, private outbox/OPML bucket, public base URL |
+| `SES_USR`, `SES_PWD`, `SENDER_EMAIL`, `DIGEST_RECIPIENT` | unset | Email via SES SMTP |
+| `TOP_STORIES`, `SECTION_CAP`, `RADAR_CAP`, `CANDIDATE_WINDOW_HOURS` | 10, 6, 15, 36 | Bulletin shape |
+| `VAULT_PATH`, `LOCAL_OPML_PATH` | iCloud vault, `~/Documents/Feeds.opml` | Mac sync only |
+| `FETCH_PROXY` | unset | Proxy for sites that block cloud IPs (403/419/429 get one retry through it), e.g. `socks5://user:pass@host:1080` |
 
-### Start the web UI
+## Deployment runbook (GCP)
 
-```bash
-uv run feed-brain serve
-```
+The stack lives in `infra/` with its own Terraform state. Shared BehindBarsPulse resources (Cloud SQL instance, VPC connector, SES and Gemini secrets) are referenced by name and never managed here.
 
-Open http://localhost:8000.
+1. **State bucket** (once):
+   ```bash
+   gcloud storage buckets create gs://playground-maroffo-feed-brain-tfstate \
+     --project playground-maroffo --location europe-west1 --uniform-bucket-level-access
+   gcloud storage buckets update gs://playground-maroffo-feed-brain-tfstate --versioning
+   ```
+2. **Variables**: `cp infra/terraform.tfvars.example infra/terraform.tfvars` and set `image` and `digest_recipient`.
+3. **Image repository first, then the image**:
+   ```bash
+   cd infra && terraform init && terraform apply -target=google_artifact_registry_repository.images
+   gcloud auth configure-docker europe-west1-docker.pkg.dev
+   docker buildx build --platform linux/amd64 \
+     -t europe-west1-docker.pkg.dev/playground-maroffo/feed-brain/feed-brain:$(git rev-parse --short HEAD) --push ..
+   ```
+4. **Everything else**: `terraform apply` (job, scheduler, buckets, DB + user, service accounts, IAM).
+5. **Migrate and first run**:
+   ```bash
+   gcloud run jobs execute feed-brain --region europe-west1 --args=migrate --wait
+   gcloud run jobs execute feed-brain --region europe-west1 --wait
+   ```
+6. **Opus deep analysis** (optional): create the secret, then set `anthropic_secret_id = "feed-brain-anthropic-api-key"` in `terraform.tfvars` and apply again.
+   ```bash
+   printf '%s' "$ANTHROPIC_API_KEY" | gcloud secrets create feed-brain-anthropic-api-key \
+     --project playground-maroffo --replication-policy automatic --data-file=-
+   ```
+7. **Proxy for blocked feeds** (optional): some sites (Hacker News, Ransom Feed) refuse Google Cloud IPs. With NordVPN, take the *service credentials* (Nord Account → NordVPN → manual setup) and a SOCKS5 server, then:
+   ```bash
+   printf '%s' 'socks5://SERVICE_USER:SERVICE_PASS@amsterdam.nl.socks.nordhold.net:1080' | \
+     gcloud secrets create feed-brain-fetch-proxy --project playground-maroffo --replication-policy automatic --data-file=-
+   ```
+   and set `fetch_proxy_secret_id = "feed-brain-fetch-proxy"` in `terraform.tfvars`, then apply.
+8. **Mac sync**: `gcloud auth application-default login`, put `DATA_BUCKET=<terraform output data_bucket>` in `.env`, then
+   ```bash
+   cp ops/launchd/it.maroffo.feed-brain.sync-vault.plist ~/Library/LaunchAgents/
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/it.maroffo.feed-brain.sync-vault.plist
+   ```
+   Edit `~/Documents/Feeds.opml` as usual: the next sync uploads it and the next run picks it up.
 
-### Add feeds
-
-1. Go to http://localhost:8000/feeds
-2. Add feeds manually (name + RSS URL), or import an OPML file from your existing reader
-
-### Fetch and classify
-
-Either click **Refresh** in the web UI, or run from the CLI:
-
-```bash
-uv run feed-brain fetch
-```
-
-This fetches all active feeds, extracts article content, and classifies each article with Haiku.
-
-### Browse and approve
-
-- Filter by tier: **High** / **Medium** / **Low**
-- Click an article title to read the full content + AI summary
-- **Thumbs up** creates a markdown clipping in your Obsidian `Clippings/` folder
-- **Thumbs down** marks it as skipped
-
-### Obsidian integration
-
-Approved articles are saved as markdown files in your `Clippings/` directory with YAML frontmatter (title, source, author, date, tags). From there, use your existing clipping processing workflow to route them into your Second Brain.
-
-## Classification
-
-The classifier uses a system prompt with your interest profile to score each article:
-
-- **Tier**: high (core interests), medium (adjacent), low (noise)
-- **Category**: maps to knowledge domains (AI, development, devops, management, etc.)
-- **Summary**: 2-3 sentence overview
-- **Reason**: why this tier was assigned
-- **Confidence**: 0.0-1.0
-
-To customize the interest profile, edit the `SYSTEM_PROMPT` in `src/feed_brain/services/classifier.py`.
-
-## Development
-
-```bash
-uv run ruff check .                    # Lint
-uv run ruff format --check .           # Format check
-uv run pytest -v                       # Tests (20 tests)
-uv run feed-brain serve --reload       # Dev server with auto-reload
-```
+New releases: build and push a new tag, update `image`, `terraform apply`. `run` applies pending migrations itself.
 
 ## License
 

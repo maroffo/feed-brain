@@ -24,6 +24,21 @@ async def db_session() -> AsyncGenerator[AsyncSession]:
 
 
 @pytest.fixture
+async def session_factory(monkeypatch) -> AsyncGenerator[async_sessionmaker[AsyncSession]]:
+    """In-memory SQLite factory patched in as the app-wide session factory."""
+    from sqlalchemy.pool import StaticPool
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", poolclass=StaticPool, echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    # Seed the module cache so every import style of get_session_factory() gets SQLite.
+    monkeypatch.setattr("feed_brain.db.session._session_factory", factory)
+    yield factory
+    await engine.dispose()
+
+
+@pytest.fixture
 def sample_feed_source() -> FeedSource:
     """Sample feed source for tests."""
     return FeedSource(name="Test Feed", url="https://example.com/feed.xml", feed_type="rss")

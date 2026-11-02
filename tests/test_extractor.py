@@ -58,7 +58,7 @@ async def test_extract_content_readability_success():
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("feed_brain.services.extractor.httpx.AsyncClient", return_value=mock_client):
+    with patch("feed_brain.services.http.httpx.AsyncClient", return_value=mock_client):
         result = await extract_content("https://example.com/article")
 
     assert result is not None

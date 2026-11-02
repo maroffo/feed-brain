@@ -1,383 +1,222 @@
-# ABOUTME: Deep analysis service using Anthropic for high-tier articles.
-# ABOUTME: Supports Minions protocol for arXiv papers (Sonnet decomposes, Ollama reads, Sonnet synthesizes).
-
-from __future__ import annotations
+# ABOUTME: Deep analysis of top stories with Claude Opus 5.5 (structured output, server-side refusal fallbacks).
+# ABOUTME: arXiv papers use Minions: Opus writes questions, Gemini reads the full paper, Opus synthesizes.
 
 import json
-from typing import TYPE_CHECKING
+from typing import Protocol
 
 import structlog
-from anthropic import AsyncAnthropic
-from sqlalchemy import select
+from anthropic import APIError, AsyncAnthropic
+from pydantic import BaseModel, ValidationError
 
-if TYPE_CHECKING:
-    from ollama import AsyncClient
-
-from feed_brain.config import get_settings
+from feed_brain.ai.gemini import GeminiError
+from feed_brain.config import Settings, get_settings
 from feed_brain.db.models import Article
-from feed_brain.db.session import get_session_factory
-from feed_brain.models import ArticleStatus, DeepAnalysis, Tier
+from feed_brain.models import ArticleStatus, DeepAnalysis
+from feed_brain.textutil import clean_text
 
 log = structlog.get_logger()
 
-SYSTEM_PROMPT = """\
-You are an expert analyst for a personal knowledge management system. \
-Provide deep analysis of high-value articles.
+# `fallbacks: "default"` re-runs a classifier-declined request (e.g. cyber) on the
+# model Anthropic recommends for that refusal category, inside the same call.
+FALLBACK_BETA = "server-side-fallback-2026-07-01"
+MAX_TOKENS = 16000  # thinking is always on for Opus 5.5 and counts toward this
+ANALYSIS_CONTENT_CHARS = 20000
+PAPER_CONTENT_CHARS = 200000
+MAX_QUESTIONS = 5
 
-## Output Format
-Respond with ONLY a JSON object (no markdown, no explanation):
-{
-  "summary": "<detailed 3-5 sentence summary capturing key arguments and conclusions>",
-  "insights": ["<non-obvious insight 1>", "<insight 2>", "<insight 3>"],
-  "money_quote": "<most impactful verbatim quote from the article, 1-2 sentences>",
-  "actionables": ["<concrete actionable takeaway 1>", "<actionable 2>"]
-}
+_LANGUAGE_RULES = """\
+Write summary, insights and actionables in Italian. The money_quote stays verbatim \
+in the source's original language."""
 
-Rules for summary: go beyond surface level. Capture the core argument, evidence, \
-and conclusions. Include nuance and caveats.
+SYSTEM_PROMPT = f"""\
+You are an expert analyst writing the in-depth notes for the top stories of a daily \
+bulletin read by a senior software engineering manager.
 
-Rules for insights: 2-4 non-obvious observations. Things a reader might miss on \
-first read. Connections to broader trends or implications.
+- summary: 3-5 sentences capturing the core argument, evidence and conclusions, with nuance and caveats.
+- insights: 2-4 non-obvious observations: what a reader might miss, links to broader trends, implications.
+- money_quote: the single most memorable or provocative sentence, quoted verbatim from the article.
+- actionables: 2-4 concrete things to do, try or apply, in imperative form; [] if purely informational.
 
-Rules for money_quote: pick the single most memorable, insightful, or provocative \
-sentence from the article text. Must be a direct quote, not a paraphrase.
+{_LANGUAGE_RULES}"""
 
-Rules for actionables: 2-4 concrete things the reader can do, try, or apply. \
-Use imperative form ("Try X", "Use Y for Z"). If purely informational, return [].
-"""
+DECOMPOSE_PROMPT = f"""\
+You are a research paper analyst. Given a paper's title and abstract, write up to \
+{MAX_QUESTIONS} targeted questions that would extract the most important information \
+from the full paper: main contribution and novelty, methodology, key results and \
+evidence, limitations, practical implications."""
+
+MINION_PROMPT = """\
+You are a careful research paper reader. Answer the question accurately and in detail \
+using ONLY the paper content provided. If the paper does not contain the answer, say so."""
+
+SYNTHESIZE_PROMPT = f"""\
+You are an expert analyst. From question-answer pairs produced by reading a research \
+paper, write a deep analysis.
+
+- summary: 3-5 sentences capturing the core argument, evidence and conclusions, with nuance and caveats.
+- insights: 2-4 non-obvious observations and implications.
+- money_quote: the single most memorable statement, quoted verbatim from the answers.
+- actionables: 2-4 concrete things to do, try or apply, in imperative form; [] if purely informational.
+
+{_LANGUAGE_RULES}"""
+
+
+class Questions(BaseModel):
+    """Decompose step output."""
+
+    questions: list[str]
+
+
+class TextLLM(Protocol):
+    async def generate_text(self, prompt: str, system: str) -> str:
+        """Return a plain-text answer."""
+        ...
+
+
+def _clean(analysis: DeepAnalysis | None) -> DeepAnalysis | None:
+    """Strip control characters (NUL breaks Postgres TEXT) from every analysis string."""
+    if analysis is None:
+        return None
+    return DeepAnalysis(
+        summary=clean_text(analysis.summary) or "",
+        insights=[clean_text(i) or "" for i in analysis.insights],
+        money_quote=clean_text(analysis.money_quote) or "",
+        actionables=[clean_text(a) or "" for a in analysis.actionables],
+    )
+
+
+def is_arxiv(article: Article) -> bool:
+    """True for arXiv abstract or PDF URLs."""
+    return "arxiv.org/" in (article.url or "")
+
+
+def make_client(settings: Settings | None = None) -> AsyncAnthropic | None:
+    """Anthropic client from settings, or None when no key is configured."""
+    settings = settings or get_settings()
+    if settings.anthropic_api_key is None:
+        log.warning("no_anthropic_api_key")
+        return None
+    return AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value())
+
+
+async def _opus[T: BaseModel](
+    client: AsyncAnthropic, settings: Settings, system: str, user: str, schema: type[T], title: str
+) -> T | None:
+    """One structured Opus call. Returns None on refusal, truncation or API error."""
+    try:
+        response = await client.beta.messages.parse(
+            model=settings.analyzer_model,
+            max_tokens=MAX_TOKENS,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+            output_format=schema,
+            output_config={"effort": settings.analyzer_effort},
+            fallbacks="default",
+            betas=[FALLBACK_BETA],
+        )
+    except APIError as e:
+        log.error("analysis_api_error", title=title[:80], error=str(e))
+        return None
+    except ValidationError as e:
+        # parse() validates the text block even when the reply was cut at max_tokens
+        log.warning("analysis_unparseable", title=title[:80], error=str(e)[:200])
+        return None
+
+    log.info(
+        "opus_call",
+        title=title[:60],
+        schema=schema.__name__,
+        served_by=response.model,
+        stop_reason=response.stop_reason,
+        input_tokens=response.usage.input_tokens,
+        output_tokens=response.usage.output_tokens,
+    )
+    if response.stop_reason == "refusal":
+        category = getattr(response.stop_details, "category", None)
+        log.warning("analysis_refused", title=title[:80], category=category)
+        return None
+    if response.stop_reason == "max_tokens":
+        log.warning("analysis_truncated", title=title[:80])
+        return None
+    return response.parsed_output
 
 
 async def analyze_article(
-    article: Article, client: AsyncAnthropic | None = None
+    article: Article, client: AsyncAnthropic, settings: Settings | None = None
 ) -> DeepAnalysis | None:
-    """Run deep analysis on a single article using Anthropic.
-
-    Returns DeepAnalysis or None if analysis fails.
-    """
-    settings = get_settings()
-    if client is None:
-        if settings.anthropic_api_key is None:
-            log.error("no_anthropic_api_key")
-            return None
-        client = AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value())
-
-    content_preview = (article.content or "")[:6000]
-    user_message = (
+    """Direct deep analysis of one article."""
+    settings = settings or get_settings()
+    user = (
         f"Title: {article.title}\n"
-        f"Author: {article.author or 'Unknown'}\n\n"
-        f"Content:\n{content_preview}"
+        f"Author: {article.author or 'Unknown'}\n"
+        f"URL: {article.url}\n\n"
+        f"Content:\n{(article.content or '')[:ANALYSIS_CONTENT_CHARS]}"
     )
-
-    try:
-        response = await client.messages.create(
-            model=settings.analyzer_model,
-            max_tokens=1500,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
-        )
-
-        text = response.content[0].text.strip() if response.content else ""
-        log.debug("analyzer_raw_response", text=text[:200])
-
-        # Strip markdown code fences if present
-        import re
-
-        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
-        data = json.loads(text)
-
-        result = DeepAnalysis(
-            summary=data["summary"],
-            insights=data.get("insights", []),
-            money_quote=data.get("money_quote", ""),
-            actionables=data.get("actionables", []),
-        )
-
-        log.info("article_analyzed", title=article.title)
-        return result
-
-    except (json.JSONDecodeError, KeyError, ValueError) as e:
-        log.error("analysis_parse_error", title=article.title, error=str(e))
-        return None
-    except Exception as e:
-        log.error("analysis_error", title=article.title, error=str(e))
-        return None
-
-
-# --- Minions protocol for arXiv papers ---
-
-DECOMPOSE_PROMPT = """\
-You are a research paper analyst. Given a paper's title and abstract, \
-generate 4-5 targeted questions that would extract the most important \
-information from the full paper.
-
-Questions should cover:
-1. Main contribution and novelty
-2. Methodology and approach
-3. Key results and supporting evidence
-4. Limitations and open questions
-5. Practical implications and applications
-
-Respond with ONLY a JSON array of question strings, no explanation.
-Example: ["What is the main contribution?", "What methodology is used?"]
-"""
-
-MINION_PROMPT = """\
-You are a careful research paper reader. Given a question about a paper, \
-answer accurately and in detail based ONLY on the paper content provided. \
-Do not speculate or add information not present in the paper.
-If the paper does not contain relevant information, say so explicitly.
-"""
-
-SYNTHESIZE_PROMPT = """\
-You are an expert analyst for a personal knowledge management system. \
-Given question-answer pairs from reading a research paper, synthesize \
-a deep analysis.
-
-## Output Format
-Respond with ONLY a JSON object (no markdown, no explanation):
-{
-  "summary": "<detailed 3-5 sentence summary capturing key arguments and conclusions>",
-  "insights": ["<non-obvious insight 1>", "<insight 2>", "<insight 3>"],
-  "money_quote": "<most impactful verbatim quote from the answers, 1-2 sentences>",
-  "actionables": ["<concrete actionable takeaway 1>", "<actionable 2>"]
-}
-
-Rules for summary: go beyond surface level. Capture the core argument, evidence, \
-and conclusions. Include nuance and caveats.
-
-Rules for insights: 2-4 non-obvious observations. Things a reader might miss on \
-first read. Connections to broader trends or implications.
-
-Rules for money_quote: pick the single most memorable, insightful, or provocative \
-statement from the Q&A content. Must be a direct quote from the answers.
-
-Rules for actionables: 2-4 concrete things the reader can do, try, or apply. \
-Use imperative form ("Try X", "Use Y for Z"). If purely informational, return [].
-"""
-
-
-def _is_arxiv(article: Article) -> bool:
-    """Check if an article URL is from arXiv."""
-    return "arxiv.org" in (article.url or "")
-
-
-async def _decompose(title: str, abstract: str, client: AsyncAnthropic, model: str) -> list[str]:
-    """Ask Sonnet to generate targeted questions about a paper.
-
-    Returns a list of up to 5 question strings.
-    """
-    user_message = f"Title: {title}\n\nAbstract:\n{abstract}"
-
-    response = await client.messages.create(
-        model=model,
-        max_tokens=500,
-        system=DECOMPOSE_PROMPT,
-        messages=[{"role": "user", "content": user_message}],
-    )
-
-    text = response.content[0].text.strip() if response.content else "[]"
-
-    import re
-
-    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
-    questions = json.loads(text)
-
-    if not isinstance(questions, list):
-        return []
-
-    return [str(q) for q in questions[:5]]
-
-
-async def _extract_answer(
-    question: str, content: str, ollama_client: AsyncClient, model: str
-) -> str:
-    """Ask the local model to answer a question from the full paper content."""
-    user_message = f"Question: {question}\n\nPaper content:\n{content}"
-
-    response = await ollama_client.chat(
-        model=model,
-        messages=[
-            {"role": "system", "content": MINION_PROMPT},
-            {"role": "user", "content": user_message},
-        ],
-    )
-
-    return response.message.content.strip()
-
-
-async def _synthesize(
-    title: str,
-    qa_pairs: list[tuple[str, str]],
-    client: AsyncAnthropic,
-    model: str,
-) -> DeepAnalysis | None:
-    """Ask Sonnet to synthesize Q&A pairs into a DeepAnalysis.
-
-    Returns DeepAnalysis or None if parsing fails.
-    """
-    qa_text = "\n\n".join(f"Q: {question}\nA: {answer}" for question, answer in qa_pairs)
-    user_message = f"Title: {title}\n\n{qa_text}"
-
-    response = await client.messages.create(
-        model=model,
-        max_tokens=1500,
-        system=SYNTHESIZE_PROMPT,
-        messages=[{"role": "user", "content": user_message}],
-    )
-
-    text = response.content[0].text.strip() if response.content else ""
-
-    import re
-
-    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
-
-    try:
-        data = json.loads(text)
-        return DeepAnalysis(
-            summary=data["summary"],
-            insights=data.get("insights", []),
-            money_quote=data.get("money_quote", ""),
-            actionables=data.get("actionables", []),
-        )
-    except (json.JSONDecodeError, KeyError, ValueError) as e:
-        log.error("synthesize_parse_error", title=title, error=str(e))
-        return None
+    return _clean(await _opus(client, settings, SYSTEM_PROMPT, user, DeepAnalysis, article.title))
 
 
 async def analyze_article_minions(
-    article: Article,
-    anthropic_client: AsyncAnthropic | None = None,
-    ollama_client: AsyncClient | None = None,
+    article: Article, client: AsyncAnthropic, gemini: TextLLM, settings: Settings | None = None
 ) -> DeepAnalysis | None:
-    """Analyze an arXiv paper using the Minions protocol.
+    """Minions protocol for papers: decompose (Opus), extract (Gemini), synthesize (Opus)."""
+    settings = settings or get_settings()
+    content = (article.content or "")[:PAPER_CONTENT_CHARS]
 
-    Decomposes analysis into targeted questions (Sonnet), extracts answers from
-    the full paper (Ollama), then synthesizes into DeepAnalysis (Sonnet).
-    Returns DeepAnalysis or None if any step fails.
-    """
-    settings = get_settings()
-
-    if anthropic_client is None:
-        if settings.anthropic_api_key is None:
-            log.error("no_anthropic_api_key")
-            return None
-        anthropic_client = AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value())
-
-    if ollama_client is None:
-        from ollama import AsyncClient
-
-        ollama_client = AsyncClient(host=settings.ollama_host)
-
-    content = article.content or ""
-    abstract = content[:500]
-
-    # Step 1: Decompose - Sonnet generates targeted questions
-    try:
-        questions = await _decompose(
-            article.title, abstract, anthropic_client, settings.analyzer_model
-        )
-    except Exception as e:
-        log.warning("minions_decompose_failed", title=article.title, error=str(e))
-        return None
-
+    decomposed = await _opus(
+        client,
+        settings,
+        DECOMPOSE_PROMPT,
+        f"Title: {article.title}\n\nAbstract:\n{content[:1500]}",
+        Questions,
+        article.title,
+    )
+    questions = decomposed.questions[:MAX_QUESTIONS] if decomposed else []
     if not questions:
-        log.warning("minions_no_questions", title=article.title)
+        log.warning("minions_no_questions", title=article.title[:80])
         return None
 
-    log.info("minions_decompose_done", title=article.title, num_questions=len(questions))
-
-    # Step 2: Extract - Ollama answers each question from full content
     qa_pairs: list[tuple[str, str]] = []
     for question in questions:
         try:
-            answer = await _extract_answer(question, content, ollama_client, settings.ollama_model)
-            qa_pairs.append((question, answer))
-        except Exception as e:
-            log.warning(
-                "minions_extract_failed",
-                title=article.title,
-                question=question,
-                error=str(e),
+            answer = await gemini.generate_text(
+                f"Question: {question}\n\nPaper content:\n{content}", MINION_PROMPT
             )
+        except GeminiError as e:
+            log.warning("minions_extract_failed", title=article.title[:80], error=str(e))
             return None
+        qa_pairs.append((question, answer))
 
-    log.info("minions_extract_done", title=article.title, num_answers=len(qa_pairs))
-
-    # Step 3: Synthesize - Sonnet produces final DeepAnalysis
-    try:
-        result = await _synthesize(
-            article.title, qa_pairs, anthropic_client, settings.analyzer_model
-        )
-    except Exception as e:
-        log.warning("minions_synthesize_failed", title=article.title, error=str(e))
-        return None
-
-    if result:
-        log.info("minions_analysis_complete", title=article.title)
-
-    return result
+    qa_text = "\n\n".join(f"Q: {q}\nA: {a}" for q, a in qa_pairs)
+    synthesized = await _opus(
+        client,
+        settings,
+        SYNTHESIZE_PROMPT,
+        f"Title: {article.title}\n\n{qa_text}",
+        DeepAnalysis,
+        article.title,
+    )
+    return _clean(synthesized)
 
 
-async def analyze_high_tier() -> int:
-    """Analyze all high-tier articles that haven't been deeply analyzed yet.
+async def deep_analyze(
+    article: Article,
+    client: AsyncAnthropic,
+    gemini: TextLLM | None,
+    settings: Settings | None = None,
+) -> DeepAnalysis | None:
+    """Minions for arXiv when Gemini is available (falling back to direct), direct otherwise."""
+    if gemini is not None and is_arxiv(article):
+        analysis = await analyze_article_minions(article, client, gemini, settings)
+        if analysis is not None:
+            return analysis
+        log.info("minions_fallback_to_direct", title=article.title[:80])
+    return await analyze_article(article, client, settings)
 
-    arXiv papers use the Minions protocol (decompose/extract/synthesize).
-    Other articles use direct Anthropic analysis. Falls back to direct
-    analysis if Minions fails.
 
-    Returns the number of articles analyzed.
-    """
-    settings = get_settings()
-    if settings.anthropic_api_key is None:
-        log.error("no_anthropic_api_key")
-        return 0
-
-    from ollama import AsyncClient
-
-    anthropic_client = AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value())
-    ollama_client = AsyncClient(host=settings.ollama_host)
-    session_factory = get_session_factory()
-    analyzed = 0
-
-    async with session_factory() as session:
-        result = await session.execute(
-            select(Article).where(
-                Article.tier == Tier.HIGH,
-                Article.status == ArticleStatus.TRIAGED,
-                Article.deep_summary.is_(None),
-                Article.content.isnot(None),
-            )
-        )
-        articles = result.scalars().all()
-
-        for article in articles:
-            analysis = None
-
-            if _is_arxiv(article):
-                log.info("using_minions_protocol", title=article.title, url=article.url)
-                analysis = await analyze_article_minions(
-                    article,
-                    anthropic_client=anthropic_client,
-                    ollama_client=ollama_client,
-                )
-                if analysis is None:
-                    log.info(
-                        "minions_fallback_to_direct",
-                        title=article.title,
-                    )
-
-            if analysis is None:
-                analysis = await analyze_article(article, client=anthropic_client)
-
-            if analysis:
-                article.deep_summary = analysis.summary
-                article.deep_insights = json.dumps(analysis.insights)
-                article.money_quote = analysis.money_quote
-                article.actionables = json.dumps(analysis.actionables)
-                article.status = ArticleStatus.ANALYZED
-                analyzed += 1
-
-            await session.commit()
-
-    log.info("analysis_complete", analyzed=analyzed, total=len(articles))
-    return analyzed
+def apply_analysis(article: Article, analysis: DeepAnalysis) -> None:
+    """Store a deep analysis on the article and mark it analyzed."""
+    article.deep_summary = analysis.summary
+    article.deep_insights = json.dumps(analysis.insights, ensure_ascii=False)
+    article.money_quote = analysis.money_quote
+    article.actionables = json.dumps(analysis.actionables, ensure_ascii=False)
+    article.status = ArticleStatus.ANALYZED

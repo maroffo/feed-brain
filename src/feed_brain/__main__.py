@@ -1,37 +1,46 @@
 # ABOUTME: CLI entry point for feed-brain with full pipeline commands.
-# ABOUTME: Supports fetch, triage, analyze, integrate, digest, run, list, reset, and import-opml.
+# ABOUTME: Commands: migrate, collect, bulletin, weekly, run, sync-vault, fetch, triage, analyze, integrate, list, reset, import-opml.
 
 import argparse
 import asyncio
 import logging
 import sys
+from datetime import date
+from pathlib import Path
 
 import structlog
+from structlog.typing import EventDict, Processor
+
+
+def _cloud_severity(_logger: object, _method: str, event_dict: EventDict) -> EventDict:
+    """Cloud Logging reads the level from `severity`."""
+    event_dict["severity"] = str(event_dict.pop("level", "info")).upper()
+    return event_dict
 
 
 def _configure_logging() -> None:
-    """Configure structlog with human-readable output, no debug."""
+    """Human-readable logs in a terminal, JSON lines (Cloud Logging) otherwise; no debug."""
+    shared: list[Processor] = [
+        structlog.contextvars.merge_contextvars,
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso" if not sys.stderr.isatty() else "%H:%M:%S"),
+    ]
+    if sys.stderr.isatty():
+        renderers: list[Processor] = [structlog.dev.ConsoleRenderer()]
+    else:
+        renderers = [
+            structlog.processors.format_exc_info,
+            _cloud_severity,
+            structlog.processors.JSONRenderer(ensure_ascii=False),
+        ]
     structlog.configure(
         wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
-        processors=[
-            structlog.contextvars.merge_contextvars,
-            structlog.processors.add_log_level,
-            structlog.processors.TimeStamper(fmt="%H:%M:%S"),
-            structlog.dev.ConsoleRenderer(),
-        ],
+        processors=[*shared, *renderers],
     )
 
 
 _configure_logging()
 log = structlog.get_logger()
-
-
-async def _init() -> None:
-    """Initialize database and run migrations."""
-    from feed_brain.db.session import init_db, migrate_db
-
-    await init_db()
-    await migrate_db()
 
 
 async def _shutdown() -> None:
@@ -41,13 +50,19 @@ async def _shutdown() -> None:
     await close_db()
 
 
+def cmd_migrate(_args: argparse.Namespace) -> None:
+    """Apply pending Alembic migrations (synchronous, outside the event loop)."""
+    from feed_brain.db.migrate import upgrade_head
+
+    upgrade_head()
+
+
 def cmd_fetch(_args: argparse.Namespace) -> None:
     """Fetch new articles from all feeds."""
     asyncio.run(_run_fetch())
 
 
 async def _run_fetch() -> None:
-    await _init()
     try:
         from feed_brain.services.fetcher import fetch_all_feeds
 
@@ -58,12 +73,11 @@ async def _run_fetch() -> None:
 
 
 def cmd_triage(_args: argparse.Namespace) -> None:
-    """Triage unclassified articles with Ollama."""
+    """Triage new articles with Gemini."""
     asyncio.run(_run_triage())
 
 
 async def _run_triage() -> None:
-    await _init()
     try:
         from feed_brain.services.triage import triage_new_articles
 
@@ -73,18 +87,40 @@ async def _run_triage() -> None:
         await _shutdown()
 
 
-def cmd_analyze(_args: argparse.Namespace) -> None:
-    """Run deep analysis on high-tier articles."""
-    asyncio.run(_run_analyze())
+def cmd_analyze(args: argparse.Namespace) -> None:
+    """Deep-analyze one article with Opus (the bulletin does this for top stories)."""
+    asyncio.run(_run_analyze(args.article_id))
 
 
-async def _run_analyze() -> None:
-    await _init()
+async def _run_analyze(article_id: int) -> None:
     try:
-        from feed_brain.services.analyzer import analyze_high_tier
+        from feed_brain.ai.gemini import Gemini, GeminiError
+        from feed_brain.db.models import Article
+        from feed_brain.db.session import get_session_factory
+        from feed_brain.services.analyzer import (
+            apply_analysis,
+            deep_analyze,
+            is_arxiv,
+            make_client,
+        )
 
-        analyzed = await analyze_high_tier()
-        log.info("analyze_done", analyzed=analyzed)
+        client = make_client()
+        if client is None:
+            sys.exit("ANTHROPIC_API_KEY is not set")
+        async with get_session_factory()() as session:
+            article = await session.get(Article, article_id)
+            if article is None:
+                sys.exit(f"No article with id {article_id}")
+            try:
+                gemini = Gemini() if is_arxiv(article) else None
+            except GeminiError as e:
+                sys.exit(str(e))
+            analysis = await deep_analyze(article, client, gemini)
+            if analysis is None:
+                sys.exit("Analysis failed (see log)")
+            apply_analysis(article, analysis)
+            await session.commit()
+        print(analysis.model_dump_json(indent=2))
     finally:
         await _shutdown()
 
@@ -95,7 +131,6 @@ def cmd_integrate(_args: argparse.Namespace) -> None:
 
 
 async def _run_integrate() -> None:
-    await _init()
     try:
         from feed_brain.services.integrator import integrate_articles
 
@@ -105,185 +140,141 @@ async def _run_integrate() -> None:
         await _shutdown()
 
 
-def cmd_digest(_args: argparse.Namespace) -> None:
-    """Generate daily digest note in the vault."""
-    asyncio.run(_run_digest())
+def cmd_collect(_args: argparse.Namespace) -> None:
+    """Sync feeds from the bucket OPML (when DATA_BUCKET is set), fetch, triage."""
+    asyncio.run(_run_collect())
 
 
-async def _run_digest() -> None:
-    await _init()
-    try:
-        from feed_brain.services.digest import generate_digest
-
-        count = await generate_digest()
-        log.info("digest_done", articles=count)
-    finally:
-        await _shutdown()
-
-
-def cmd_run(_args: argparse.Namespace) -> None:
-    """Full pipeline: fetch → triage → analyze → integrate → digest."""
-    asyncio.run(_run_pipeline())
-
-
-async def _run_pipeline() -> None:
-    import json
-    from datetime import UTC, datetime
-
-    from anthropic import AsyncAnthropic
-    from ollama import AsyncClient
-    from sqlalchemy import select
-
-    await _init()
+async def _run_collect() -> None:
     try:
         from feed_brain.config import get_settings
-        from feed_brain.db.models import Article
-        from feed_brain.db.session import get_session_factory
-        from feed_brain.models import ArticleStatus, Tier
-        from feed_brain.services.analyzer import (
-            _is_arxiv,
-            analyze_article,
-            analyze_article_minions,
-        )
-        from feed_brain.services.digest import generate_digest
-        from feed_brain.services.fetcher import fetch_all_feeds
-        from feed_brain.services.integrator import integrate_article
-        from feed_brain.services.triage import TriageParseError, triage_article
+        from feed_brain.services.pipeline import collect
+        from feed_brain.services.storage import GcsStorage
 
         settings = get_settings()
-
-        # Step 1: Fetch (batch, fast)
-        new = await fetch_all_feeds()
-        log.info("pipeline_fetch_done", new_articles=new)
-
-        # Set up clients once
-        ollama_client = AsyncClient(host=settings.ollama_host)
-        anthropic_client = None
-        if settings.anthropic_api_key:
-            anthropic_client = AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value())
-
-        # Step 2: Process each article through the full pipeline
-        session_factory = get_session_factory()
-        triaged = 0
-        analyzed = 0
-        integrated = 0
-
-        async with session_factory() as session:
-            result = await session.execute(
-                select(Article).where(
-                    Article.status == ArticleStatus.NEW,
-                    Article.content.isnot(None),
-                )
-            )
-            articles = result.scalars().all()
-
-            total = len(articles)
-            errors = 0
-
-            for i, article in enumerate(articles, 1):
-                progress = f"[{i}/{total}]"
-
-                # Triage
-                try:
-                    triage = await triage_article(article, client=ollama_client, settings=settings)
-                except TriageParseError:
-                    log.error("triage_failed", progress=progress, title=article.title[:60])
-                    article.status = ArticleStatus.ERROR
-                    errors += 1
-                    await session.commit()
-                    continue
-
-                if not triage:
-                    article.status = ArticleStatus.ERROR
-                    errors += 1
-                    await session.commit()
-                    continue
-
-                article.summary = triage.summary
-                article.tier = triage.tier.value
-                article.category = triage.category.value
-                article.reason = triage.reason
-                article.confidence = triage.confidence
-                article.classified_at = datetime.now(UTC)
-                article.status = ArticleStatus.TRIAGED
-                triaged += 1
-                await session.commit()
-
-                tier_str = triage.tier.value.upper()
-                conf_str = f"{triage.confidence:.0%}"
-                log.info(
-                    "triaged",
-                    progress=progress,
-                    tier=tier_str,
-                    confidence=conf_str,
-                    title=article.title[:60],
-                )
-
-                # Analyze (high-tier only)
-                if article.tier == Tier.HIGH and anthropic_client:
-                    analysis = None
-                    method = "direct"
-
-                    if _is_arxiv(article):
-                        method = "minions"
-                        analysis = await analyze_article_minions(
-                            article,
-                            anthropic_client=anthropic_client,
-                            ollama_client=ollama_client,
-                        )
-
-                    if analysis is None:
-                        method = "direct"
-                        analysis = await analyze_article(article, client=anthropic_client)
-
-                    if analysis:
-                        article.deep_summary = analysis.summary
-                        article.deep_insights = json.dumps(analysis.insights)
-                        article.money_quote = analysis.money_quote
-                        article.actionables = json.dumps(analysis.actionables)
-                        article.status = ArticleStatus.ANALYZED
-                        analyzed += 1
-                        await session.commit()
-
-                        log.info(
-                            "analyzed",
-                            progress=progress,
-                            method=method,
-                            title=article.title[:60],
-                        )
-
-                # Integrate (high-tier with sufficient confidence)
-                confidence = article.confidence or 0.0
-                if article.tier == Tier.HIGH and confidence >= settings.auto_threshold:
-                    target = integrate_article(article, settings)
-                    if target:
-                        article.integrated_at = datetime.now(UTC)
-                        article.integration_target = target
-                        article.status = ArticleStatus.INTEGRATED
-                        integrated += 1
-                        await session.commit()
-
-                        log.info(
-                            "integrated",
-                            progress=progress,
-                            target=target,
-                            title=article.title[:60],
-                        )
-
-        log.info(
-            "pipeline_done",
-            total=total,
-            triaged=triaged,
-            analyzed=analyzed,
-            integrated=integrated,
-            errors=errors,
-        )
-
-        # Step 3: Digest (once at end, covers all articles processed today)
-        digest_count = await generate_digest()
-        log.info("pipeline_digest_done", articles=digest_count)
+        opml_store = GcsStorage.from_name(settings.data_bucket) if settings.data_bucket else None
+        await collect(opml_store, settings)
     finally:
         await _shutdown()
+
+
+def cmd_bulletin(args: argparse.Namespace) -> None:
+    """Generate (or reuse) the daily bulletin and render it under --out."""
+    asyncio.run(_run_bulletin(args.date, args.force, Path(args.out)))
+
+
+async def _run_bulletin(issue: str | None, force: bool, out: Path) -> None:
+    try:
+        await _bulletin(date.fromisoformat(issue) if issue else None, force, out)
+    finally:
+        await _shutdown()
+
+
+async def _bulletin(issue_date: date | None, force: bool, out: Path) -> None:
+    from feed_brain.models import BulletinData
+    from feed_brain.services.analyzer import make_client
+    from feed_brain.services.bulletin import generate_bulletin, today_rome
+    from feed_brain.services.render import write_bulletin_files
+
+    issue_date = issue_date or today_rome()
+    bulletin = await generate_bulletin(issue_date, force=force, anthropic=make_client())
+    if bulletin is None:
+        log.warning("bulletin_skipped", issue_date=str(issue_date), reason="no candidates")
+        return
+    data = BulletinData.model_validate_json(bulletin.content_json)
+    html_path, md_path = write_bulletin_files(data, out)
+    log.info("bulletin_rendered", html=str(html_path), md=str(md_path))
+
+
+def cmd_weekly(args: argparse.Namespace) -> None:
+    """Generate the weekly recap (--week, or whichever week is due) and render it under --out."""
+    asyncio.run(_run_weekly(args.week, args.force, Path(args.out)))
+
+
+async def _run_weekly(week: str | None, force: bool, out: Path) -> None:
+    try:
+        await _weekly(week, force, out)
+    finally:
+        await _shutdown()
+
+
+async def _weekly(week: str | None, force: bool, out: Path) -> None:
+    from datetime import timedelta
+
+    from feed_brain.models import WeeklyData
+    from feed_brain.services.bulletin import today_rome
+    from feed_brain.services.render import write_weekly_files
+    from feed_brain.services.weekly import (
+        due_week,
+        existing_week_starts,
+        generate_weekly,
+        parse_iso_week,
+        week_start,
+    )
+
+    if week:
+        start = parse_iso_week(week)
+    else:
+        today = today_rome()
+        this_monday = week_start(today)
+        existing = await existing_week_starts([this_monday, this_monday - timedelta(days=7)])
+        due = due_week(today, existing)
+        if due is None:
+            log.info("weekly_not_due", today=str(today))
+            return
+        start = due
+    digest = await generate_weekly(start, force=force)
+    if digest is None:
+        return
+    html_path, md_path = write_weekly_files(
+        WeeklyData.model_validate_json(digest.content_json), out
+    )
+    log.info("weekly_rendered", html=str(html_path), md=str(md_path))
+
+
+def cmd_run(args: argparse.Namespace) -> None:
+    """Scheduled entry point: migrate, collect, bulletin, deliver, weekly if due."""
+    from feed_brain.db.migrate import upgrade_head
+
+    upgrade_head()
+    errors = asyncio.run(_run_daily(args.dry_run, args.to))
+    if errors:
+        sys.exit(f"failed steps: {', '.join(errors)}")
+
+
+async def _run_daily(dry_run: bool, to: str | None) -> list[str]:
+    try:
+        from feed_brain.config import get_settings
+        from feed_brain.services.bulletin import today_rome
+        from feed_brain.services.pipeline import run_daily
+
+        return await run_daily(today=today_rome(), dry_run=dry_run, to=to, settings=get_settings())
+    finally:
+        await _shutdown()
+
+
+def cmd_sync_vault(args: argparse.Namespace) -> None:
+    """Mac side: pull the vault outbox into the Obsidian vault and push the local OPML."""
+    from feed_brain.config import get_settings
+    from feed_brain.services.storage import GcsStorage, LocalStorage
+    from feed_brain.services.vault_sync import push_opml, sync_vault
+
+    settings = get_settings()
+    vault = Path(args.vault) if args.vault else settings.vault_path
+    if args.outbox:
+        store = LocalStorage(Path(args.outbox))
+    elif settings.data_bucket:
+        store = GcsStorage.from_name(settings.data_bucket)
+    else:
+        sys.exit("Set DATA_BUCKET or pass --outbox DIR")
+    result = sync_vault(store, vault)
+    pushed = False
+    if not args.outbox and not args.no_opml:
+        pushed = push_opml(store, settings.local_opml_path, settings.opml_object)
+    print(
+        f"Entries appended: {result.appended}, duplicates skipped: {result.duplicates}, "
+        f"notes written: {result.digests}, OPML uploaded: {'yes' if pushed else 'no'}"
+    )
 
 
 def cmd_list(args: argparse.Namespace) -> None:
@@ -294,7 +285,6 @@ def cmd_list(args: argparse.Namespace) -> None:
 async def _run_list(tier: str | None, limit: int) -> None:
     from sqlalchemy import select
 
-    await _init()
     try:
         from feed_brain.db.models import Article
         from feed_brain.db.session import get_session_factory
@@ -329,9 +319,10 @@ def cmd_reset(_args: argparse.Namespace) -> None:
 
 
 async def _run_reset() -> None:
-    from sqlalchemy import update
+    from typing import cast
 
-    await _init()
+    from sqlalchemy import CursorResult, update
+
     try:
         from feed_brain.db.models import Article
         from feed_brain.db.session import get_session_factory
@@ -353,6 +344,7 @@ async def _run_reset() -> None:
                 .values(
                     status=ArticleStatus.NEW,
                     tier=None,
+                    section=None,
                     category=None,
                     confidence=None,
                     summary=None,
@@ -360,6 +352,7 @@ async def _run_reset() -> None:
                     classified_at=None,
                     integrated_at=None,
                     integration_target=None,
+                    bulletin_id=None,
                     deep_summary=None,
                     deep_insights=None,
                     money_quote=None,
@@ -367,8 +360,9 @@ async def _run_reset() -> None:
                 )
             )
             await session.commit()
-            log.info("reset_done", articles_reset=result.rowcount)
-            print(f"Reset {result.rowcount} articles to 'new' status.")
+            reset_count = cast(CursorResult, result).rowcount
+            log.info("reset_done", articles_reset=reset_count)
+            print(f"Reset {reset_count} articles to 'new' status.")
     finally:
         await _shutdown()
 
@@ -379,60 +373,25 @@ def cmd_import_opml(args: argparse.Namespace) -> None:
 
 
 async def _run_import_opml(filepath: str, sync: bool = False) -> None:
-    from pathlib import Path
-
-    from sqlalchemy import select
-
-    await _init()
     try:
-        from feed_brain.db.models import FeedSource
         from feed_brain.db.session import get_session_factory
-        from feed_brain.services.opml import parse_opml
+        from feed_brain.services.opml import parse_opml, sync_feed_sources
 
-        content = Path(filepath).read_text(encoding="utf-8")
-        feeds = parse_opml(content)
-        opml_urls = {feed["url"] for feed in feeds}
-
-        session_factory = get_session_factory()
-        imported = 0
-        reactivated = 0
-        deactivated = 0
-
-        async with session_factory() as session:
-            # Import new feeds and reactivate existing ones in OPML
-            for feed in feeds:
-                result = await session.execute(
-                    select(FeedSource).where(FeedSource.url == feed["url"])
-                )
-                existing = result.scalar_one_or_none()
-                if existing:
-                    if not existing.active:
-                        existing.active = True
-                        reactivated += 1
-                else:
-                    session.add(FeedSource(name=feed["name"], url=feed["url"]))
-                    imported += 1
-
-            # With --sync, deactivate feeds not in OPML
-            if sync:
-                all_feeds = await session.execute(select(FeedSource))
-                for source in all_feeds.scalars().all():
-                    if source.url not in opml_urls and source.active:
-                        source.active = False
-                        deactivated += 1
-
+        feeds = parse_opml(Path(filepath).read_text(encoding="utf-8"))
+        async with get_session_factory()() as session:
+            stats = await sync_feed_sources(session, feeds, deactivate_missing=sync)
             await session.commit()
 
-        print(f"Imported {imported} new feeds (of {len(feeds)} total in OPML).")
-        if reactivated:
-            print(f"Reactivated {reactivated} feeds.")
-        if deactivated:
-            print(f"Deactivated {deactivated} feeds not in OPML.")
+        print(f"Imported {stats.imported} new feeds (of {len(feeds)} total in OPML).")
+        if stats.reactivated:
+            print(f"Reactivated {stats.reactivated} feeds.")
+        if stats.deactivated:
+            print(f"Deactivated {stats.deactivated} feeds not in OPML.")
         log.info(
             "opml_import_done",
-            imported=imported,
-            reactivated=reactivated,
-            deactivated=deactivated,
+            imported=stats.imported,
+            reactivated=stats.reactivated,
+            deactivated=stats.deactivated,
             total=len(feeds),
         )
     finally:
@@ -444,23 +403,66 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="feed-brain", description="AI-powered feed aggregator")
     subparsers = parser.add_subparsers(dest="command")
 
+    # migrate
+    subparsers.add_parser("migrate", help="Apply pending database migrations")
+
     # fetch
     subparsers.add_parser("fetch", help="Fetch new articles from all feeds")
 
     # triage
-    subparsers.add_parser("triage", help="Triage unclassified articles with Ollama")
+    subparsers.add_parser("triage", help="Triage new articles with Gemini")
 
     # analyze
-    subparsers.add_parser("analyze", help="Deep analysis on high-tier articles")
+    analyze_parser = subparsers.add_parser("analyze", help="Deep-analyze one article with Opus")
+    analyze_parser.add_argument("--article-id", type=int, required=True, help="Article id")
 
     # integrate
     subparsers.add_parser("integrate", help="Push high-tier articles to Second Brain")
 
-    # digest
-    subparsers.add_parser("digest", help="Generate daily digest note in vault")
+    # collect
+    subparsers.add_parser("collect", help="Fetch feeds and triage new articles")
+
+    # bulletin
+    bulletin_parser = subparsers.add_parser(
+        "bulletin", help="Generate and render the daily bulletin"
+    )
+    bulletin_parser.add_argument(
+        "--date", default=None, help="Issue date YYYY-MM-DD (default: today, Rome)"
+    )
+    bulletin_parser.add_argument(
+        "--force", action="store_true", help="Regenerate an existing issue"
+    )
+    bulletin_parser.add_argument(
+        "--out", default="./site", help="Output directory (default ./site)"
+    )
+
+    # weekly
+    weekly_parser = subparsers.add_parser("weekly", help="Generate and render the weekly recap")
+    weekly_parser.add_argument(
+        "--week", default=None, help="ISO week like 2026-W44 (default: due week)"
+    )
+    weekly_parser.add_argument("--force", action="store_true", help="Regenerate an existing recap")
+    weekly_parser.add_argument("--out", default="./site", help="Output directory (default ./site)")
 
     # run
-    subparsers.add_parser("run", help="Full pipeline: fetch→triage→analyze→integrate→digest")
+    run_parser = subparsers.add_parser(
+        "run", help="Scheduled entry point: migrate, collect, bulletin, deliver, weekly if due"
+    )
+    run_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Publish to ./site and ./outbox, send no email, set no delivery stamps "
+        "(collect and generation still write to the configured DB)",
+    )
+    run_parser.add_argument("--to", default=None, help="Email recipient override")
+
+    # sync-vault
+    sync_parser = subparsers.add_parser("sync-vault", help="Pull the vault outbox into Obsidian")
+    sync_parser.add_argument(
+        "--outbox", default=None, help="Local outbox dir instead of DATA_BUCKET"
+    )
+    sync_parser.add_argument("--vault", default=None, help="Vault dir (default VAULT_PATH)")
+    sync_parser.add_argument("--no-opml", action="store_true", help="Do not upload the local OPML")
 
     # list
     list_parser = subparsers.add_parser("list", help="List recent articles")
@@ -477,12 +479,16 @@ def main() -> None:
 
     args = parser.parse_args()
     commands = {
+        "migrate": cmd_migrate,
         "fetch": cmd_fetch,
         "triage": cmd_triage,
         "analyze": cmd_analyze,
         "integrate": cmd_integrate,
-        "digest": cmd_digest,
+        "collect": cmd_collect,
+        "bulletin": cmd_bulletin,
+        "weekly": cmd_weekly,
         "run": cmd_run,
+        "sync-vault": cmd_sync_vault,
         "list": cmd_list,
         "reset": cmd_reset,
         "import-opml": cmd_import_opml,

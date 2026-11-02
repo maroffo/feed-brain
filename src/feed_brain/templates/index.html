@@ -1,0 +1,18 @@
+{#- ABOUTME: Archive page of the public site: latest weekly recaps and daily bulletins, newest first. -#}
+{#- ABOUTME: Links are relative so the page works from any bucket URL or a local ./site folder. -#}
+{% extends "_base.html" %}
+{% block content %}
+<h1>feed-brain</h1>
+<div class="sub">Bollettino quotidiano e riepilogo settimanale dai feed di Max.</div>
+{% if weeklies %}
+<h2>Settimane</h2>
+<ul class="radar">
+{% for w in weeklies %}<li><a href="weekly/{{ w.label }}.html">{{ w.label }}: {{ w.title }}</a></li>
+{% endfor %}</ul>
+{% endif %}
+<h2>Bollettini</h2>
+<ul class="radar">
+{% for b in bulletins %}<li><a href="bulletins/{{ b.issue_date.isoformat() }}.html">{{ b.issue_date.isoformat() }}: {{ b.title }}</a></li>
+{% endfor %}</ul>
+{% endblock %}
+{% block footer %}generato da feed-brain{% endblock %}
