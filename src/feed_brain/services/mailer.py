@@ -63,5 +63,6 @@ async def send_email(
         settings.ses_pwd.get_secret_value(),
         msg,
     )
-    log.info("email_sent", subject=subject[:80])
+    # Gmail clips HTML bodies over ~102 KB: the size is logged to watch that margin.
+    log.info("email_sent", subject=subject[:80], html_bytes=len(html.encode()))
     return recipient

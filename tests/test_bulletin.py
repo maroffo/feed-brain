@@ -1,6 +1,7 @@
 # ABOUTME: Tests for daily bulletin generation: candidates, idempotency, force, analysis scope, assembly.
 # ABOUTME: Gemini (clustering + writer) and Opus (deep_analyze) are faked; DB is in-memory SQLite.
 
+import dataclasses
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
@@ -451,3 +452,16 @@ async def test_forwarded_newsletters_are_candidates_whatever_their_tier(session_
         candidates = await _load_candidates(session, window_hours=36)
 
     assert [c.title for c in candidates] == ["low-newsletter"]
+
+
+def test_stories_built_on_forwarded_newsletters_skip_the_section_cap():
+    """Every forwarded newsletter shows up; only RSS stories beyond the cap are folded."""
+    rest = [Story("tech", [_cand(i, section="tech", tier="medium")], f"H{i}") for i in range(1, 5)]
+    paid = _cand(9, section="tech", tier="low")
+    rest.append(Story("tech", [dataclasses.replace(paid, paid=True)], "Newsletter"))
+
+    data = assemble(ISSUE, None, [], rest, [], {}, 5, section_cap=2)
+
+    assert [i.headline for i in data.sections[0].items] == ["H1", "H2", "Newsletter"]
+    assert data.sections[0].omitted == 2
+    assert data.sections[0].items[-1].sources[0].paid is True
