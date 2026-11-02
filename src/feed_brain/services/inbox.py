@@ -1,26 +1,40 @@
-# ABOUTME: Newsletter inbox: turns forwarded mails (raw MIME stored by SES) into articles.
+# ABOUTME: Newsletter inbox: turns forwarded mails (raw MIME stored by SES in S3) into articles.
 # ABOUTME: Links are decoded offline and reduced to a clean post URL; tracking/token links are never kept.
 
+import asyncio
 import base64
 import binascii
 import json
 import re
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from email import message_from_bytes, policy
 from email.message import EmailMessage
 from email.utils import parseaddr, parsedate_to_datetime
+from typing import Any, Protocol, Self
 from urllib.parse import urlsplit
 
+import boto3
+import structlog
 from bs4 import BeautifulSoup
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from feed_brain.config import Settings
+from feed_brain.db.models import Article, FeedSource
+from feed_brain.db.session import get_session_factory
 from feed_brain.services.extractor import extract_from_html
 from feed_brain.textutil import clean_text
+
+log = structlog.get_logger()
 
 EMAIL_FEED_TYPE = "email"
 NEWSLETTER_FOLDER = "Newsletter"
 FALLBACK_SOURCE = "Newsletter"
 GMAIL_FORWARDING_SENDER = "forwarding-noreply@google.com"
+MAIL_PREFIX = "mail/"
+# Written by SES when the receipt rule is created; not a mail.
+SES_SETUP_OBJECT = f"{MAIL_PREFIX}AMAZON_SES_SETUP_NOTIFICATION"
 
 _FORWARD_PREFIX = re.compile(r"^(?:\s*(?:fwd?|i|inoltro)\s*:)+\s*", re.IGNORECASE)
 _SUBSTACK_POST = re.compile(r"^/p/[^/]+/?$")
@@ -186,3 +200,160 @@ def parse_mail(raw: bytes) -> InboxMail:
         published=published,
         message_id=message_id,
     )
+
+
+# --- Mailbox (S3) ---
+
+
+class Mailbox(Protocol):
+    def keys(self, limit: int) -> list[str]:
+        """Up to `limit` stored mails, oldest first."""
+        ...
+
+    def read(self, key: str) -> bytes:
+        """Raw MIME of one mail."""
+        ...
+
+    def delete(self, key: str) -> None:
+        """Remove a processed mail."""
+        ...
+
+
+def _google_id_token(audience: str) -> str:
+    """ID token of the runtime's Google identity (the job service account on Cloud Run)."""
+    from google.auth.transport.requests import Request
+    from google.oauth2 import id_token
+
+    return id_token.fetch_id_token(Request(), audience)
+
+
+def s3_client(settings: Settings) -> Any:
+    """S3 client for the inbox: keyless web-identity federation when a role is configured,
+    the default AWS credential chain (e.g. AWS_PROFILE on the Mac) otherwise."""
+    if not settings.inbox_role_arn:
+        return boto3.client("s3", region_name=settings.inbox_region)
+    sts = boto3.client("sts", region_name=settings.inbox_region)
+    credentials = sts.assume_role_with_web_identity(
+        RoleArn=settings.inbox_role_arn,
+        RoleSessionName="feed-brain-job",
+        WebIdentityToken=_google_id_token(settings.inbox_audience),
+        DurationSeconds=900,
+    )["Credentials"]
+    return boto3.client(
+        "s3",
+        region_name=settings.inbox_region,
+        aws_access_key_id=credentials["AccessKeyId"],
+        aws_secret_access_key=credentials["SecretAccessKey"],
+        aws_session_token=credentials["SessionToken"],
+    )
+
+
+class S3Mailbox:
+    """Mails stored by the SES receipt rule under `mail/` in the inbox bucket."""
+
+    def __init__(self, client: Any, bucket: str) -> None:
+        self.client = client
+        self.bucket = bucket
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> Self:
+        if not settings.inbox_bucket:
+            raise ValueError("INBOX_BUCKET is not set")
+        return cls(s3_client(settings), settings.inbox_bucket)
+
+    def keys(self, limit: int) -> list[str]:
+        paginator = self.client.get_paginator("list_objects_v2")
+        objects = [
+            obj
+            for page in paginator.paginate(Bucket=self.bucket, Prefix=MAIL_PREFIX)
+            for obj in page.get("Contents", [])
+            if obj["Key"] != SES_SETUP_OBJECT
+        ]
+        objects.sort(key=lambda obj: obj["LastModified"])
+        return [obj["Key"] for obj in objects[:limit]]
+
+    def read(self, key: str) -> bytes:
+        return self.client.get_object(Bucket=self.bucket, Key=key)["Body"].read()
+
+    def delete(self, key: str) -> None:
+        self.client.delete_object(Bucket=self.bucket, Key=key)
+
+
+# --- Ingest ---
+
+
+@dataclass
+class InboxStats:
+    stored: int = 0
+    duplicates: int = 0
+    skipped: int = 0  # dropped: spam, virus, empty
+    kept: int = 0  # left in the bucket on purpose (Gmail forwarding confirmation)
+    failed: int = 0  # unparseable, left for the next run
+
+
+async def _store(session: AsyncSession, mail: InboxMail) -> bool:
+    """Insert the mail as a new article under its email source; False if the URL is known."""
+    if (await session.execute(select(Article.id).where(Article.url == mail.url))).first():
+        return False
+    source_url = f"email:{mail.source_key}"
+    source = (
+        await session.execute(select(FeedSource).where(FeedSource.url == source_url))
+    ).scalar_one_or_none()
+    if source is None:
+        source = FeedSource(
+            name=mail.source_name,
+            url=source_url,
+            feed_type=EMAIL_FEED_TYPE,
+            folder=NEWSLETTER_FOLDER,
+        )
+        session.add(source)
+        await session.flush()
+    session.add(
+        Article(
+            url=mail.url,
+            title=mail.title,
+            source_id=source.id,
+            content=mail.content,
+            published_date=mail.published,
+            status="new",
+            fetched_at=datetime.now(UTC),
+        )
+    )
+    return True
+
+
+async def ingest_inbox(mailbox: Mailbox, settings: Settings, *, delete: bool = True) -> InboxStats:
+    """Store new mails as articles, oldest first, at most `inbox_max_per_run`.
+
+    A mail leaves the bucket only once its article is committed (or it is a duplicate or
+    a dropped skip); with delete=False (dry runs) every mail stays.
+    """
+    stats = InboxStats()
+    factory = get_session_factory()
+    for key in await asyncio.to_thread(mailbox.keys, settings.inbox_max_per_run):
+        try:
+            raw = await asyncio.to_thread(mailbox.read, key)
+            mail = await asyncio.to_thread(parse_mail, raw)
+        except SkipMail as e:
+            log.info("inbox_skipped", key=key, reason=e.reason, kept=e.keep)
+            if e.keep:
+                stats.kept += 1
+                continue
+            stats.skipped += 1
+        except Exception as e:  # noqa: BLE001 - one bad mail must not block the rest
+            log.error("inbox_parse_failed", key=key, error=str(e)[:200])
+            stats.failed += 1
+            continue
+        else:
+            async with factory() as session:
+                stored = await _store(session, mail)
+                await session.commit()
+            if stored:
+                stats.stored += 1
+                log.info("inbox_stored", key=key, source=mail.source_name, title=mail.title[:80])
+            else:
+                stats.duplicates += 1
+        if delete:
+            await asyncio.to_thread(mailbox.delete, key)
+    log.info("inbox_done", **asdict(stats))
+    return stats

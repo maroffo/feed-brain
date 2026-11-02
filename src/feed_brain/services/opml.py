@@ -83,7 +83,8 @@ async def sync_feed_sources(
 
     if deactivate_missing:
         for url, source in existing.items():
-            if url not in opml_urls and source.active:
+            # Only RSS sources come from the OPML; newsletter inbox sources are not its to retire.
+            if url not in opml_urls and source.active and source.feed_type == "rss":
                 source.active = False
                 stats.deactivated += 1
 

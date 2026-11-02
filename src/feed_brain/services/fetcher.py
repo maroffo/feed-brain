@@ -56,7 +56,9 @@ async def fetch_all_feeds() -> int:
 
     # Load sources
     async with session_factory() as session:
-        result = await session.execute(select(FeedSource).where(FeedSource.active.is_(True)))
+        result = await session.execute(
+            select(FeedSource).where(FeedSource.active.is_(True), FeedSource.feed_type == "rss")
+        )
         sources = result.scalars().all()
         # Collect existing URLs to skip duplicates
         existing_result = await session.execute(select(Article.url))
