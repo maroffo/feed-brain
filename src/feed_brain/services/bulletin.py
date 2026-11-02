@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from feed_brain.ai.gemini import GeminiError
 from feed_brain.ai.prompts import BULLETIN_PROMPT
 from feed_brain.config import Settings, get_settings
-from feed_brain.db.models import Article, Bulletin, FeedSource
+from feed_brain.db.models import EMAIL_FEED_TYPE, Article, Bulletin, FeedSource
 from feed_brain.db.session import get_session_factory
 from feed_brain.models import (
     SECTION_TITLES,
@@ -94,7 +94,7 @@ def first_sentence(text: str) -> str:
 
 
 def _sources(story: Story) -> list[SourceRef]:
-    return [SourceRef(name=c.source, title=c.title, url=c.url) for c in story.articles]
+    return [SourceRef(name=c.source, title=c.title, url=c.url, paid=c.paid) for c in story.articles]
 
 
 def assemble(
@@ -175,6 +175,7 @@ async def _load_candidates(
             Article.confidence,
             Article.summary,
             func.coalesce(func.length(Article.content), 0),
+            FeedSource.feed_type,
         )
         .outerjoin(FeedSource, Article.source_id == FeedSource.id)
         .where(
@@ -198,8 +199,20 @@ async def _load_candidates(
             confidence=confidence or 0.0,
             summary=summary or "",
             content_len=content_len,
+            paid=feed_type == EMAIL_FEED_TYPE,
         )
-        for article_id, title, url, source, tier, section, confidence, summary, content_len in rows
+        for (
+            article_id,
+            title,
+            url,
+            source,
+            tier,
+            section,
+            confidence,
+            summary,
+            content_len,
+            feed_type,
+        ) in rows
     ]
 
 

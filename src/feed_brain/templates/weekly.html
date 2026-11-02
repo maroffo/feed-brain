@@ -1,6 +1,7 @@
 {#- ABOUTME: Sunday weekly recap page/email: intro, narrative arcs with links, reflection, list of daily issues. -#}
-{#- ABOUTME: Rendered from WeeklyData only; daily issue links use site_url (email) or ../ (local files). -#}
+{#- ABOUTME: Rendered from WeeklyData only; `public` (site) hides arc text backed by paid sources. -#}
 {% extends "_base.html" %}
+{% import "_macros.html" as m %}
 {% block content %}
 <h1>{{ data.title }}</h1>
 {% if data.subtitle %}<div class="sub">{{ data.subtitle }}</div>{% endif %}
@@ -9,9 +10,13 @@
 {% for arc in data.arcs %}
 <div class="story">
 <h3>{{ arc.title }}</h3>
+{% if public and arc.links | selectattr("paid") | list %}
+{{ m.reserved_note() }}
+{% else %}
 {% for p in arc.text | paragraphs %}<p>{{ p }}</p>
 {% endfor %}
-{% if arc.links %}<div class="src">{% for s in arc.links %}<a href="{{ s.url | safe_url }}">{{ s.name }}: {{ s.title }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</div>{% endif %}
+{% endif %}
+{% if arc.links %}{{ m.sources(arc.links) }}{% endif %}
 </div>
 {% endfor %}
 {% if data.reflection %}

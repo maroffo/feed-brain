@@ -6,6 +6,9 @@ from datetime import UTC, date, datetime
 from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+RSS_FEED_TYPE = "rss"  # imported from the OPML, downloaded by the fetcher
+EMAIL_FEED_TYPE = "email"  # created by the newsletter inbox; paid content
+
 
 class Base(DeclarativeBase):
     pass
@@ -17,7 +20,7 @@ class FeedSource(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255))
     url: Mapped[str] = mapped_column(String(2048), unique=True)
-    feed_type: Mapped[str] = mapped_column(String(20), default="rss")
+    feed_type: Mapped[str] = mapped_column(String(20), default=RSS_FEED_TYPE)
     folder: Mapped[str | None] = mapped_column(String(255))  # OPML folder, triage hint
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(

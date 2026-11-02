@@ -1,11 +1,7 @@
 {#- ABOUTME: Daily bulletin page/email: Il punto, top stories with Approfondimento, In breve per section, threat radar. -#}
-{#- ABOUTME: Rendered from BulletinData only (no DB access); links point to the original articles. -#}
+{#- ABOUTME: Rendered from BulletinData only; `public` (site) keeps paid-source stories to title and link. -#}
 {% extends "_base.html" %}
-{% macro sources(refs) -%}
-<div class="src">
-{%- for s in refs %}<a href="{{ s.url | safe_url }}">{{ s.name }}: {{ s.title }}</a>{% if not loop.last %} · {% endif %}{% endfor -%}
-</div>
-{%- endmacro %}
+{% import "_macros.html" as m %}
 {% block content %}
 <h1>{{ data.title }}</h1>
 {% if data.subtitle %}<div class="sub">{{ data.subtitle }}</div>{% endif %}
@@ -19,11 +15,16 @@
 {% if data.top_stories %}
 <h2>Le storie del giorno</h2>
 {% for story in data.top_stories %}
+{% set reserved = public and story.sources | selectattr("paid") | list %}
 <div class="story">
 <div class="k">{{ section_titles[story.section] }}{% if story.sources|length > 1 %} · {{ story.sources|length }} fonti{% endif %}</div>
 <h3>{{ story.title }}</h3>
+{% if reserved %}
+{{ m.reserved_note() }}
+{{ m.sources(story.sources) }}
+{% else %}
 <p>{{ story.text }}</p>
-{{ sources(story.sources) }}
+{{ m.sources(story.sources) }}
 {% if story.analysis %}
 <div class="deep">
 <b>Approfondimento</b>
@@ -33,6 +34,7 @@
 {% if story.analysis.actionables %}<b>Da fare</b><ul>{% for a in story.analysis.actionables %}<li>{{ a }}</li>{% endfor %}</ul>{% endif %}
 </div>
 {% endif %}
+{% endif %}
 </div>
 {% endfor %}
 {% endif %}
@@ -40,10 +42,11 @@
 {% for block in data.sections %}
 <h2 class="s">{{ block.title }}</h2>
 {% for item in block.items %}
+{% set reserved = public and item.sources | selectattr("paid") | list %}
 <div class="item">
-<a class="h" href="{{ item.sources[0].url | safe_url }}">{{ item.headline }}</a>
-{% if item.summary %}<span class="muted"> {{ item.summary }}</span>{% endif %}
-{{ sources(item.sources) }}
+{{ m.link(item.sources[0].url, item.headline, "h") }}
+{% if item.summary and not reserved %}<span class="muted"> {{ item.summary }}</span>{% endif %}
+{{ m.sources(item.sources) }}
 </div>
 {% endfor %}
 {% if block.omitted %}<div class="more">e altre {{ block.omitted }} storie</div>{% endif %}
@@ -52,7 +55,7 @@
 {% if data.radar %}
 <h2 class="s">Radar minacce</h2>
 <ul class="radar">
-{% for r in data.radar %}<li><a href="{{ r.url | safe_url }}">{{ r.title }}</a> <span class="more">({{ r.source }})</span></li>
+{% for r in data.radar %}<li>{{ m.link(r.url, r.title) }} <span class="more">({{ r.source }})</span></li>
 {% endfor %}</ul>
 {% endif %}
 {% endblock %}

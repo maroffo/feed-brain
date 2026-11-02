@@ -92,6 +92,7 @@ class SourceRef(BaseModel):
     name: str
     title: str
     url: str
+    paid: bool = False  # newsletter inbox: the public page shows title and link only
 
 
 class TopStory(BaseModel):

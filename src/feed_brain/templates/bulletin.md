@@ -25,7 +25,7 @@ articles: {{ data.articles_count }}
 
 {{ story.text }}
 
-{% for s in story.sources %}- {{ s.name }}: [{{ s.title | md_text }}]({{ s.url | md_url }})
+{% for s in story.sources %}- {{ s.name }}: {{ s.title | md_link(s.url) }}
 {% endfor %}
 {% if story.analysis %}
 **Approfondimento.** {{ story.analysis.summary }}
@@ -46,7 +46,7 @@ articles: {{ data.articles_count }}
 {% endif %}
 {% for block in data.sections %}## {{ block.title }}
 
-{% for item in block.items %}- **[{{ item.headline | md_text }}]({{ item.sources[0].url | md_url }})** {{ item.summary }}{% for s in item.sources[1:] %} · [{{ s.name | md_text }}]({{ s.url | md_url }}){% endfor %}
+{% for item in block.items %}- **{{ item.headline | md_link(item.sources[0].url) }}** {{ item.summary }}{% for s in item.sources[1:] %} · {{ s.name | md_link(s.url) }}{% endfor %}
 {% endfor %}
 {% if block.omitted %}- *e altre {{ block.omitted }} storie*
 {% endif %}
@@ -54,6 +54,6 @@ articles: {{ data.articles_count }}
 {% endfor %}
 {% if data.radar %}## Radar minacce
 
-{% for r in data.radar %}- [{{ r.title | md_text }}]({{ r.url | md_url }}) ({{ r.source }})
+{% for r in data.radar %}- {{ r.title | md_link(r.url) }} ({{ r.source }})
 {% endfor %}
 {% endif %}

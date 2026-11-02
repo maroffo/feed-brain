@@ -9,7 +9,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from feed_brain.db.models import FeedSource
+from feed_brain.db.models import RSS_FEED_TYPE, FeedSource
 
 log = structlog.get_logger()
 
@@ -84,7 +84,7 @@ async def sync_feed_sources(
     if deactivate_missing:
         for url, source in existing.items():
             # Only RSS sources come from the OPML; newsletter inbox sources are not its to retire.
-            if url not in opml_urls and source.active and source.feed_type == "rss":
+            if url not in opml_urls and source.active and source.feed_type == RSS_FEED_TYPE:
                 source.active = False
                 stats.deactivated += 1
 

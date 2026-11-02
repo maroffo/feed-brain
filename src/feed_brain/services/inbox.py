@@ -21,14 +21,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from feed_brain.config import Settings
-from feed_brain.db.models import Article, FeedSource
+from feed_brain.db.models import EMAIL_FEED_TYPE, Article, FeedSource
 from feed_brain.db.session import get_session_factory
 from feed_brain.services.extractor import extract_from_html
 from feed_brain.textutil import clean_text
 
 log = structlog.get_logger()
 
-EMAIL_FEED_TYPE = "email"
 NEWSLETTER_FOLDER = "Newsletter"
 FALLBACK_SOURCE = "Newsletter"
 GMAIL_FORWARDING_SENDER = "forwarding-noreply@google.com"
