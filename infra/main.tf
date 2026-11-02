@@ -201,6 +201,22 @@ resource "google_cloud_run_v2_job" "feed_brain" {
           name  = "SENDER_EMAIL"
           value = var.sender_email
         }
+        env {
+          name  = "INBOX_BUCKET"
+          value = aws_s3_bucket.inbox.id
+        }
+        env {
+          name  = "INBOX_REGION"
+          value = var.inbox_aws_region
+        }
+        env {
+          name  = "INBOX_ROLE_ARN"
+          value = aws_iam_role.inbox_reader.arn
+        }
+        env {
+          name  = "INBOX_AUDIENCE"
+          value = local.inbox_audience
+        }
 
         dynamic "env" {
           for_each = local.secret_env
