@@ -134,7 +134,7 @@ async def _fetch_single_feed(
     result = FeedResult(source_name=source.name)
 
     try:
-        xml_content = (await http.fetch(source.url, settings)).text
+        xml_content = (await http.fetch(source.url, settings, kind="feed")).text
     except httpx.HTTPError as e:
         log.error("feed_download_error", name=source.name, error=str(e))
         result.error = str(e)

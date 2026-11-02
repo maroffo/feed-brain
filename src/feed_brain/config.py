@@ -37,9 +37,14 @@ class Settings(BaseSettings):
     db_password: SecretStr | None = None
     db_pool_size: int = 2
 
-    # Feed fetching
-    feed_timeout: int = 15
-    feed_user_agent: str = (
+    # Feed fetching. RSS downloads send an honest bot UA: bot managers such as Akamai reject a
+    # browser UA coming from a non-browser TLS stack (CISA does). Article pages and PDFs keep a
+    # browser UA, which many news sites require for HTML. 30 s fits slow multi-MB feeds; pages
+    # keep 15 s because a feed's articles are fetched one after another.
+    feed_timeout: int = 30
+    feed_user_agent: str = "feed-brain/0.1 (+https://github.com/maroffo/feed-brain)"
+    page_timeout: int = 15
+    page_user_agent: str = (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15"
     )

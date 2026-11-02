@@ -3,6 +3,7 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from feed_brain.config import Settings
 from feed_brain.services.extractor import _sanitize_html, extract_content
 
 
@@ -63,3 +64,21 @@ async def test_extract_content_readability_success():
 
     assert result is not None
     assert "Content paragraph" in result
+
+
+async def test_extract_content_uses_the_page_user_agent():
+    """Article pages are fetched with the browser UA (many sites reject bot UAs on HTML)."""
+    html = "<html><body><article>" + "<p>Content paragraph.</p>" * 10 + "</article></body></html>"
+    mock_response = MagicMock()
+    mock_response.text = html
+    mock_response.raise_for_status = MagicMock()
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    settings = Settings(_env_file=None, feed_user_agent="feed-ua", page_user_agent="page-ua")
+
+    with patch("feed_brain.services.http.httpx.AsyncClient", return_value=mock_client) as client:
+        await extract_content("https://example.com/article", settings)
+
+    assert client.call_args.kwargs["headers"] == {"User-Agent": "page-ua"}

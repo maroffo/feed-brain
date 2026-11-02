@@ -10,6 +10,7 @@ import pymupdf
 import structlog
 
 from feed_brain.config import Settings, get_settings
+from feed_brain.services import http
 
 log = structlog.get_logger()
 
@@ -39,13 +40,7 @@ async def extract_pdf(url: str, settings: Settings | None = None) -> str | None:
     pdf_url = to_pdf_url(url)
 
     try:
-        async with httpx.AsyncClient(
-            timeout=30,
-            headers={"User-Agent": settings.feed_user_agent},
-            follow_redirects=True,
-        ) as client:
-            response = await client.get(pdf_url)
-            response.raise_for_status()
+        response = await http.fetch(pdf_url, settings, kind="page")
 
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
             tmp.write(response.content)
