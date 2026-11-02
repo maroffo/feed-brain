@@ -250,7 +250,7 @@ def test_sources_without_a_web_page_render_as_plain_text():
         }
     )
     html = render_bulletin_html(data)
-    assert "Digest della settimana" in html and "Newsletter: Weekly digest" in html
+    assert "Digest della settimana" in html and "Newsletter" in html
     assert "Radar digest" in html
     assert "mid:" not in html and 'href="#"' not in html
 
@@ -281,3 +281,29 @@ def test_weekly_public_page_hides_arc_text_backed_by_paid_sources():
     assert "Arco riservato" in public and "Racconto riservato" not in public
     assert "Racconto libero" in public
     assert "Racconto riservato" in render_weekly_html(weekly)
+
+
+def test_single_source_brief_names_its_source_without_repeating_the_link():
+    """The headline already links the article: a single-source brief adds only the outlet name
+    (keeps the email under Gmail's clip size); multi-source briefs keep the full source list."""
+    multi = BriefItem(
+        headline="Due fonti",
+        summary="",
+        sources=[
+            SourceRef(name="Krebs", title="A", url="https://krebs/x"),
+            SourceRef(name="Il Post", title="B", url="https://post/y"),
+        ],
+    )
+    data = DATA.model_copy(
+        update={
+            "sections": [
+                SectionBlock(
+                    key=Section.SPORT, title="Sport", items=[DATA.sections[0].items[0], multi]
+                )
+            ]
+        }
+    )
+    html = render_bulletin_html(data)
+    assert html.count('href="https://onrugby/x"') == 1
+    assert "On Rugby" in html and "On Rugby: Italia" not in html
+    assert "Krebs: A" in html and "Il Post: B" in html
