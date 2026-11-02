@@ -1,0 +1,6 @@
+# ABOUTME: Copy to terraform.tfvars (gitignored) and fill in; everything else has a default.
+# ABOUTME: Set anthropic_secret_id once the secret exists to enable Opus deep analysis.
+
+image            = "europe-west1-docker.pkg.dev/playground-maroffo/feed-brain/feed-brain:TAG"
+digest_recipient = "you@example.com"
+# anthropic_secret_id = "feed-brain-anthropic-api-key"

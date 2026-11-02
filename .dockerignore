@@ -1,0 +1,17 @@
+# ABOUTME: Keeps the Docker build context small and free of secrets and local state.
+# ABOUTME: Only pyproject, uv.lock, README, alembic.ini and src/ are needed by the Dockerfile.
+.git
+.venv
+.env
+.env.*
+!.env.example
+**/__pycache__
+.pytest_cache
+.ruff_cache
+quality_reports
+site
+outbox
+infra
+tests
+ops
+*.db
