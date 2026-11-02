@@ -1,0 +1,29 @@
+{#- ABOUTME: Sunday weekly recap page/email: intro, narrative arcs with links, reflection, list of daily issues. -#}
+{#- ABOUTME: Rendered from WeeklyData only; daily issue links use site_url (email) or ../ (local files). -#}
+{% extends "_base.html" %}
+{% block content %}
+<h1>{{ data.title }}</h1>
+{% if data.subtitle %}<div class="sub">{{ data.subtitle }}</div>{% endif %}
+{% for p in data.intro | paragraphs %}<p>{{ p }}</p>
+{% endfor %}
+{% for arc in data.arcs %}
+<div class="story">
+<h3>{{ arc.title }}</h3>
+{% for p in arc.text | paragraphs %}<p>{{ p }}</p>
+{% endfor %}
+{% if arc.links %}<div class="src">{% for s in arc.links %}<a href="{{ s.url | safe_url }}">{{ s.name }}: {{ s.title }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</div>{% endif %}
+</div>
+{% endfor %}
+{% if data.reflection %}
+<h2>Da tenere d'occhio</h2>
+{% for p in data.reflection | paragraphs %}<p>{{ p }}</p>
+{% endfor %}
+{% endif %}
+<h2 class="s">I bollettini della settimana</h2>
+<ul class="radar">
+{% for b in data.bulletins %}<li><a href="{% if site_url %}{{ site_url | safe_url }}/{% else %}../{% endif %}bulletins/{{ b.issue_date.isoformat() }}.html">{{ b.issue_date.isoformat() }}: {{ b.title }}</a></li>
+{% endfor %}</ul>
+{% endblock %}
+{% block footer %}
+{{ data.stories_count }} storie principali in {{ data.bulletins|length }} bollettini · generato da feed-brain{% if site_url %} · <a href="{{ site_url | safe_url }}">archivio</a>{% endif %}
+{% endblock %}

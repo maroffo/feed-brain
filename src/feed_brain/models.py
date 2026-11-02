@@ -100,6 +100,7 @@ class TopStory(BaseModel):
     section: Section
     sources: list[SourceRef]
     analysis: DeepAnalysis | None = None
+    lead_url: str = ""  # article chosen as the story lead (vault entry candidate)
 
 
 class BriefItem(BaseModel):
@@ -112,6 +113,7 @@ class SectionBlock(BaseModel):
     key: Section
     title: str
     items: list[BriefItem]
+    omitted: int = 0  # stories beyond the per-section cap (kept out of the email)
 
 
 class RadarItem(BaseModel):
@@ -146,6 +148,49 @@ class BulletinDraft(BaseModel):
     subtitle: str
     editorial: str
     top_stories: list[WrittenStory]
+
+
+class WeeklyArc(BaseModel):
+    """Writer output: one narrative arc, pointing at the week's numbered stories."""
+
+    title: str
+    text: str
+    story_indices: list[int]
+
+
+class WeeklyDraft(BaseModel):
+    """Gemini writer output for the Sunday recap."""
+
+    title: str
+    subtitle: str
+    intro: str
+    arcs: list[WeeklyArc]
+    reflection: str
+
+
+class WeeklyArcData(BaseModel):
+    title: str
+    text: str
+    links: list[SourceRef]
+
+
+class BulletinRef(BaseModel):
+    issue_date: date
+    title: str
+
+
+class WeeklyData(BaseModel):
+    """Self-contained weekly recap for rendering."""
+
+    week_start: date
+    week_end: date
+    title: str
+    subtitle: str
+    intro: str
+    arcs: list[WeeklyArcData]
+    reflection: str
+    bulletins: list[BulletinRef]
+    stories_count: int
 
 
 class FeedSourceCreate(BaseModel):

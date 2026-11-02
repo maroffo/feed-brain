@@ -1,0 +1,61 @@
+{#- ABOUTME: Daily bulletin page/email: Il punto, top stories with Approfondimento, In breve per section, threat radar. -#}
+{#- ABOUTME: Rendered from BulletinData only (no DB access); links point to the original articles. -#}
+{% extends "_base.html" %}
+{% macro sources(refs) -%}
+<div class="src">
+{%- for s in refs %}<a href="{{ s.url | safe_url }}">{{ s.name }}: {{ s.title }}</a>{% if not loop.last %} · {% endif %}{% endfor -%}
+</div>
+{%- endmacro %}
+{% block content %}
+<h1>{{ data.title }}</h1>
+{% if data.subtitle %}<div class="sub">{{ data.subtitle }}</div>{% endif %}
+
+{% if data.editorial %}
+<h2>Il punto</h2>
+{% for p in data.editorial | paragraphs %}<p>{{ p }}</p>
+{% endfor %}
+{% endif %}
+
+{% if data.top_stories %}
+<h2>Le storie del giorno</h2>
+{% for story in data.top_stories %}
+<div class="story">
+<div class="k">{{ section_titles[story.section] }}{% if story.sources|length > 1 %} · {{ story.sources|length }} fonti{% endif %}</div>
+<h3>{{ story.title }}</h3>
+<p>{{ story.text }}</p>
+{{ sources(story.sources) }}
+{% if story.analysis %}
+<div class="deep">
+<b>Approfondimento</b>
+<p>{{ story.analysis.summary }}</p>
+{% if story.analysis.insights %}<ul>{% for i in story.analysis.insights %}<li>{{ i }}</li>{% endfor %}</ul>{% endif %}
+{% if story.analysis.money_quote %}<blockquote>“{{ story.analysis.money_quote }}”</blockquote>{% endif %}
+{% if story.analysis.actionables %}<b>Da fare</b><ul>{% for a in story.analysis.actionables %}<li>{{ a }}</li>{% endfor %}</ul>{% endif %}
+</div>
+{% endif %}
+</div>
+{% endfor %}
+{% endif %}
+
+{% for block in data.sections %}
+<h2 class="s">{{ block.title }}</h2>
+{% for item in block.items %}
+<div class="item">
+<a class="h" href="{{ item.sources[0].url | safe_url }}">{{ item.headline }}</a>
+{% if item.summary %}<span class="muted"> {{ item.summary }}</span>{% endif %}
+{{ sources(item.sources) }}
+</div>
+{% endfor %}
+{% if block.omitted %}<div class="more">e altre {{ block.omitted }} storie</div>{% endif %}
+{% endfor %}
+
+{% if data.radar %}
+<h2 class="s">Radar minacce</h2>
+<ul class="radar">
+{% for r in data.radar %}<li><a href="{{ r.url | safe_url }}">{{ r.title }}</a> <span class="more">({{ r.source }})</span></li>
+{% endfor %}</ul>
+{% endif %}
+{% endblock %}
+{% block footer %}
+{{ data.articles_count }} articoli considerati · generato da feed-brain{% if site_url %} · <a href="{{ site_url | safe_url }}">archivio</a>{% endif %}
+{% endblock %}

@@ -1,24 +1,41 @@
 # ABOUTME: CLI entry point for feed-brain with full pipeline commands.
-# ABOUTME: Commands: migrate, fetch, triage, collect, run, analyze, integrate, list, reset, import-opml.
+# ABOUTME: Commands: migrate, collect, bulletin, weekly, run, sync-vault, fetch, triage, analyze, integrate, list, reset, import-opml.
 
 import argparse
 import asyncio
 import logging
 import sys
+from datetime import date
+from pathlib import Path
 
 import structlog
+from structlog.typing import EventDict, Processor
+
+
+def _cloud_severity(_logger: object, _method: str, event_dict: EventDict) -> EventDict:
+    """Cloud Logging reads the level from `severity`."""
+    event_dict["severity"] = str(event_dict.pop("level", "info")).upper()
+    return event_dict
 
 
 def _configure_logging() -> None:
-    """Configure structlog with human-readable output, no debug."""
+    """Human-readable logs in a terminal, JSON lines (Cloud Logging) otherwise; no debug."""
+    shared: list[Processor] = [
+        structlog.contextvars.merge_contextvars,
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso" if not sys.stderr.isatty() else "%H:%M:%S"),
+    ]
+    if sys.stderr.isatty():
+        renderers: list[Processor] = [structlog.dev.ConsoleRenderer()]
+    else:
+        renderers = [
+            structlog.processors.format_exc_info,
+            _cloud_severity,
+            structlog.processors.JSONRenderer(ensure_ascii=False),
+        ]
     structlog.configure(
         wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
-        processors=[
-            structlog.contextvars.merge_contextvars,
-            structlog.processors.add_log_level,
-            structlog.processors.TimeStamper(fmt="%H:%M:%S"),
-            structlog.dev.ConsoleRenderer(),
-        ],
+        processors=[*shared, *renderers],
     )
 
 
@@ -124,32 +141,140 @@ async def _run_integrate() -> None:
 
 
 def cmd_collect(_args: argparse.Namespace) -> None:
-    """Fetch all feeds, then triage the new articles."""
+    """Sync feeds from the bucket OPML (when DATA_BUCKET is set), fetch, triage."""
     asyncio.run(_run_collect())
 
 
 async def _run_collect() -> None:
     try:
-        await _collect()
+        from feed_brain.config import get_settings
+        from feed_brain.services.pipeline import collect
+        from feed_brain.services.storage import GcsStorage
+
+        settings = get_settings()
+        opml_store = GcsStorage.from_name(settings.data_bucket) if settings.data_bucket else None
+        await collect(opml_store, settings)
     finally:
         await _shutdown()
 
 
-async def _collect() -> None:
-    from feed_brain.services.fetcher import fetch_all_feeds
-    from feed_brain.services.triage import triage_new_articles
-
-    new = await fetch_all_feeds()
-    triaged = await triage_new_articles()
-    log.info("collect_done", new_articles=new, triaged=triaged)
+def cmd_bulletin(args: argparse.Namespace) -> None:
+    """Generate (or reuse) the daily bulletin and render it under --out."""
+    asyncio.run(_run_bulletin(args.date, args.force, Path(args.out)))
 
 
-def cmd_run(_args: argparse.Namespace) -> None:
-    """Scheduled entry point: migrate, then collect."""
+async def _run_bulletin(issue: str | None, force: bool, out: Path) -> None:
+    try:
+        await _bulletin(date.fromisoformat(issue) if issue else None, force, out)
+    finally:
+        await _shutdown()
+
+
+async def _bulletin(issue_date: date | None, force: bool, out: Path) -> None:
+    from feed_brain.models import BulletinData
+    from feed_brain.services.analyzer import make_client
+    from feed_brain.services.bulletin import generate_bulletin, today_rome
+    from feed_brain.services.render import write_bulletin_files
+
+    issue_date = issue_date or today_rome()
+    bulletin = await generate_bulletin(issue_date, force=force, anthropic=make_client())
+    if bulletin is None:
+        log.warning("bulletin_skipped", issue_date=str(issue_date), reason="no candidates")
+        return
+    data = BulletinData.model_validate_json(bulletin.content_json)
+    html_path, md_path = write_bulletin_files(data, out)
+    log.info("bulletin_rendered", html=str(html_path), md=str(md_path))
+
+
+def cmd_weekly(args: argparse.Namespace) -> None:
+    """Generate the weekly recap (--week, or whichever week is due) and render it under --out."""
+    asyncio.run(_run_weekly(args.week, args.force, Path(args.out)))
+
+
+async def _run_weekly(week: str | None, force: bool, out: Path) -> None:
+    try:
+        await _weekly(week, force, out)
+    finally:
+        await _shutdown()
+
+
+async def _weekly(week: str | None, force: bool, out: Path) -> None:
+    from datetime import timedelta
+
+    from feed_brain.models import WeeklyData
+    from feed_brain.services.bulletin import today_rome
+    from feed_brain.services.render import write_weekly_files
+    from feed_brain.services.weekly import (
+        due_week,
+        existing_week_starts,
+        generate_weekly,
+        parse_iso_week,
+        week_start,
+    )
+
+    if week:
+        start = parse_iso_week(week)
+    else:
+        today = today_rome()
+        this_monday = week_start(today)
+        existing = await existing_week_starts([this_monday, this_monday - timedelta(days=7)])
+        due = due_week(today, existing)
+        if due is None:
+            log.info("weekly_not_due", today=str(today))
+            return
+        start = due
+    digest = await generate_weekly(start, force=force)
+    if digest is None:
+        return
+    html_path, md_path = write_weekly_files(
+        WeeklyData.model_validate_json(digest.content_json), out
+    )
+    log.info("weekly_rendered", html=str(html_path), md=str(md_path))
+
+
+def cmd_run(args: argparse.Namespace) -> None:
+    """Scheduled entry point: migrate, collect, bulletin, deliver, weekly if due."""
     from feed_brain.db.migrate import upgrade_head
 
     upgrade_head()
-    asyncio.run(_run_collect())
+    errors = asyncio.run(_run_daily(args.dry_run, args.to))
+    if errors:
+        sys.exit(f"failed steps: {', '.join(errors)}")
+
+
+async def _run_daily(dry_run: bool, to: str | None) -> list[str]:
+    try:
+        from feed_brain.config import get_settings
+        from feed_brain.services.bulletin import today_rome
+        from feed_brain.services.pipeline import run_daily
+
+        return await run_daily(today=today_rome(), dry_run=dry_run, to=to, settings=get_settings())
+    finally:
+        await _shutdown()
+
+
+def cmd_sync_vault(args: argparse.Namespace) -> None:
+    """Mac side: pull the vault outbox into the Obsidian vault and push the local OPML."""
+    from feed_brain.config import get_settings
+    from feed_brain.services.storage import GcsStorage, LocalStorage
+    from feed_brain.services.vault_sync import push_opml, sync_vault
+
+    settings = get_settings()
+    vault = Path(args.vault) if args.vault else settings.vault_path
+    if args.outbox:
+        store = LocalStorage(Path(args.outbox))
+    elif settings.data_bucket:
+        store = GcsStorage.from_name(settings.data_bucket)
+    else:
+        sys.exit("Set DATA_BUCKET or pass --outbox DIR")
+    result = sync_vault(store, vault)
+    pushed = False
+    if not args.outbox and not args.no_opml:
+        pushed = push_opml(store, settings.local_opml_path, settings.opml_object)
+    print(
+        f"Entries appended: {result.appended}, duplicates skipped: {result.duplicates}, "
+        f"notes written: {result.digests}, OPML uploaded: {'yes' if pushed else 'no'}"
+    )
 
 
 def cmd_list(args: argparse.Namespace) -> None:
@@ -227,6 +352,7 @@ async def _run_reset() -> None:
                     classified_at=None,
                     integrated_at=None,
                     integration_target=None,
+                    bulletin_id=None,
                     deep_summary=None,
                     deep_insights=None,
                     money_quote=None,
@@ -247,8 +373,6 @@ def cmd_import_opml(args: argparse.Namespace) -> None:
 
 
 async def _run_import_opml(filepath: str, sync: bool = False) -> None:
-    from pathlib import Path
-
     try:
         from feed_brain.db.session import get_session_factory
         from feed_brain.services.opml import parse_opml, sync_feed_sources
@@ -298,8 +422,47 @@ def main() -> None:
     # collect
     subparsers.add_parser("collect", help="Fetch feeds and triage new articles")
 
+    # bulletin
+    bulletin_parser = subparsers.add_parser(
+        "bulletin", help="Generate and render the daily bulletin"
+    )
+    bulletin_parser.add_argument(
+        "--date", default=None, help="Issue date YYYY-MM-DD (default: today, Rome)"
+    )
+    bulletin_parser.add_argument(
+        "--force", action="store_true", help="Regenerate an existing issue"
+    )
+    bulletin_parser.add_argument(
+        "--out", default="./site", help="Output directory (default ./site)"
+    )
+
+    # weekly
+    weekly_parser = subparsers.add_parser("weekly", help="Generate and render the weekly recap")
+    weekly_parser.add_argument(
+        "--week", default=None, help="ISO week like 2026-W44 (default: due week)"
+    )
+    weekly_parser.add_argument("--force", action="store_true", help="Regenerate an existing recap")
+    weekly_parser.add_argument("--out", default="./site", help="Output directory (default ./site)")
+
     # run
-    subparsers.add_parser("run", help="Scheduled entry point: migrate, then collect")
+    run_parser = subparsers.add_parser(
+        "run", help="Scheduled entry point: migrate, collect, bulletin, deliver, weekly if due"
+    )
+    run_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Publish to ./site and ./outbox, send no email, set no delivery stamps "
+        "(collect and generation still write to the configured DB)",
+    )
+    run_parser.add_argument("--to", default=None, help="Email recipient override")
+
+    # sync-vault
+    sync_parser = subparsers.add_parser("sync-vault", help="Pull the vault outbox into Obsidian")
+    sync_parser.add_argument(
+        "--outbox", default=None, help="Local outbox dir instead of DATA_BUCKET"
+    )
+    sync_parser.add_argument("--vault", default=None, help="Vault dir (default VAULT_PATH)")
+    sync_parser.add_argument("--no-opml", action="store_true", help="Do not upload the local OPML")
 
     # list
     list_parser = subparsers.add_parser("list", help="List recent articles")
@@ -322,7 +485,10 @@ def main() -> None:
         "analyze": cmd_analyze,
         "integrate": cmd_integrate,
         "collect": cmd_collect,
+        "bulletin": cmd_bulletin,
+        "weekly": cmd_weekly,
         "run": cmd_run,
+        "sync-vault": cmd_sync_vault,
         "list": cmd_list,
         "reset": cmd_reset,
         "import-opml": cmd_import_opml,

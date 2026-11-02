@@ -3,9 +3,9 @@
 
 from feed_brain.db.models import Article
 from feed_brain.services.integrator import (
-    _build_entry,
-    _build_timeline_entry,
     _resolve_topic_file,
+    build_entry,
+    build_timeline_entry,
     integrate_article,
 )
 
@@ -34,7 +34,7 @@ def test_resolve_topic_file_none_category(tmp_path):
     assert name == "Second Brain - Development"
 
 
-def test_build_entry_basic():
+def testbuild_entry_basic():
     """Entry uses what/why table format with source link."""
     article = Article(
         url="https://example.com/article",
@@ -42,7 +42,7 @@ def test_build_entry_basic():
         summary="AI agents are transforming software development workflows.",
         reason="Relevant to AI tooling interests.",
     )
-    entry = _build_entry(article)
+    entry = build_entry(article)
     assert "### AI Agents Overview" in entry
     assert "| **What** |" in entry
     assert "| **Why** |" in entry
@@ -50,7 +50,7 @@ def test_build_entry_basic():
     assert "Source" in entry
 
 
-def test_build_entry_with_deep_analysis():
+def testbuild_entry_with_deep_analysis():
     """Entry includes deep analysis extras when available."""
     article = Article(
         url="https://example.com/deep",
@@ -62,14 +62,14 @@ def test_build_entry_with_deep_analysis():
         money_quote="The best code is no code.",
         actionables='["Try X", "Use Y"]',
     )
-    entry = _build_entry(article)
+    entry = build_entry(article)
     assert "The best code is no code." in entry
     assert "Insight one" in entry
     assert "Actionable:" in entry
     assert "Try X" in entry
 
 
-def test_build_entry_prefers_deep_summary():
+def testbuild_entry_prefers_deep_summary():
     """Entry uses deep_summary over triage summary when available."""
     article = Article(
         url="https://example.com/deep",
@@ -78,15 +78,15 @@ def test_build_entry_prefers_deep_summary():
         reason="Why.",
         deep_summary="Much more detailed deep analysis summary.",
     )
-    entry = _build_entry(article)
+    entry = build_entry(article)
     assert "detailed deep analysis" in entry
     assert "Triage summary" not in entry
 
 
-def test_build_timeline_entry():
+def testbuild_timeline_entry():
     """Timeline entry follows the standard format."""
     article = Article(url="https://example.com/x", title="Test Article")
-    entry = _build_timeline_entry(article, "Second Brain - Development")
+    entry = build_timeline_entry(article, "Second Brain - Development")
     assert "| [Test Article] |" in entry
     assert "Source: feed-brain" in entry
     assert "-> Second Brain - Development.md" in entry
@@ -171,3 +171,38 @@ def test_integrate_article_appends_not_overwrites(tmp_path):
     content = topic_file.read_text()
     assert "### First Article" in content
     assert "### Second Article" in content
+
+
+def test_topic_for_maps_categories():
+    from feed_brain.services.integrator import topic_for
+
+    assert topic_for("devops_cloud") == "Second Brain - DevOps and Cloud"
+    assert topic_for("bogus") == topic_for(None) == "Second Brain - Development"
+
+
+def test_append_entry_skips_urls_already_in_topic_file(tmp_path):
+    from feed_brain.services.integrator import append_entry
+
+    topic = "Second Brain - Development"
+    assert append_entry(
+        tmp_path, topic, "https://x/10", "### A\n- [Source](https://x/10)\n", "- t1"
+    )
+    assert not append_entry(tmp_path, topic, "https://x/10", "### A again\n", "- t1 again")
+    # a URL that is a prefix of an existing one is not a duplicate
+    assert append_entry(tmp_path, topic, "https://x/1", "### B\n- [Source](https://x/1)\n", "- t2")
+
+    note = (tmp_path / f"{topic}.md").read_text()
+    assert note.count("### A") == 1 and "### B" in note
+    timeline = (tmp_path / "Second Brain - Timeline.md").read_text()
+    assert timeline == "- t1\n- t2\n"
+
+
+def test_append_entry_rejects_unknown_topics(tmp_path):
+    import pytest
+
+    from feed_brain.services.integrator import append_entry
+
+    for topic in ("../../outside", "/tmp/x", "Topic"):
+        with pytest.raises(ValueError):
+            append_entry(tmp_path / "vault", topic, "https://x/1", "e", "t")
+    assert not (tmp_path / "outside.md").exists()

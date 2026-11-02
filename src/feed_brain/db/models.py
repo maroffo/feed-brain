@@ -1,9 +1,9 @@
-# ABOUTME: SQLAlchemy ORM models for articles and feed sources.
-# ABOUTME: Defines FeedSource and Article tables with indexes and relationships.
+# ABOUTME: SQLAlchemy ORM models for the feed-brain database.
+# ABOUTME: FeedSource, Article, Bulletin (daily issue) and WeeklyDigest tables.
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -34,6 +34,7 @@ class Article(Base):
         Index("ix_articles_status", "status"),
         Index("ix_articles_fetched_at", "fetched_at"),
         Index("ix_articles_section", "section"),
+        Index("ix_articles_bulletin_id", "bulletin_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -61,6 +62,9 @@ class Article(Base):
     money_quote: Mapped[str | None] = mapped_column(Text)
     actionables: Mapped[str | None] = mapped_column(Text)  # JSON array
 
+    # Bulletin that covered this article (stamped so it is never covered twice)
+    bulletin_id: Mapped[int | None] = mapped_column(ForeignKey("bulletins.id", ondelete="SET NULL"))
+
     # Integration
     integrated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     integration_target: Mapped[str | None] = mapped_column(String(500))
@@ -77,3 +81,39 @@ class Article(Base):
     classified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     source: Mapped[FeedSource | None] = relationship(back_populates="articles")
+
+
+class Bulletin(Base):
+    """One daily issue. content_json is a self-contained BulletinData for rendering."""
+
+    __tablename__ = "bulletins"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    issue_date: Mapped[date] = mapped_column(Date, unique=True)
+    title: Mapped[str] = mapped_column(String(300))
+    subtitle: Mapped[str] = mapped_column(String(500))
+    editorial: Mapped[str] = mapped_column(Text)
+    content_json: Mapped[str] = mapped_column(Text)
+    articles_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WeeklyDigest(Base):
+    """Sunday recap of one ISO week (week_start is that Monday)."""
+
+    __tablename__ = "weekly_digests"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    week_start: Mapped[date] = mapped_column(Date, unique=True)
+    title: Mapped[str] = mapped_column(String(300))
+    subtitle: Mapped[str] = mapped_column(String(500))
+    content_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -51,9 +51,26 @@ class Settings(BaseSettings):
     candidate_window_hours: int = 36
     top_stories: int = 10
     radar_cap: int = 15
+    section_cap: int = 6  # 'In breve' items per section; keeps the email under Gmail's 102 KB clip
     analysis_concurrency: int = 3
 
-    # Second Brain (Obsidian vault)
+    # Delivery: public site + private data bucket (outbox, OPML copy)
+    site_bucket: str | None = None
+    data_bucket: str | None = None
+    site_url: str | None = None  # public base URL of the site bucket, no trailing slash
+    opml_object: str = "opml/Feeds.opml"
+    local_opml_path: Path = Path.home() / "Documents" / "Feeds.opml"
+
+    # Email (AWS SES SMTP, same credentials and env names as BehindBarsPulse)
+    smtp_host: str = "email-smtp.us-east-1.amazonaws.com"
+    smtp_port: int = 587
+    ses_usr: SecretStr | None = None
+    ses_pwd: SecretStr | None = None
+    sender_email: str = "digest@behindbars.news"
+    sender_name: str = "feed-brain"
+    digest_recipient: str | None = None
+
+    # Second Brain (Obsidian vault): local only, used by sync-vault and integrate on the Mac
     vault_path: Path = Path(
         "/Users/maroffo/Library/Mobile Documents/iCloud~md~obsidian/Documents/Second Brain"
     )
