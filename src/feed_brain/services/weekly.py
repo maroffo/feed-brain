@@ -83,7 +83,10 @@ def _prompt(days: list[BulletinData]) -> tuple[str, list[SourceRef]]:
         for story in data.top_stories:
             outlets = ", ".join(s.name for s in story.sources)
             lines.append(f"[{len(refs)}] {story.title} ({outlets}): {story.text}")
-            refs.append(story.sources[0])
+            # The lead link stands for the whole story: paid if any source is, so the
+            # public weekly hides the arc text just as the daily page hid the story text.
+            paid = any(s.paid for s in story.sources)
+            refs.append(story.sources[0].model_copy(update={"paid": paid}))
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks), refs
 

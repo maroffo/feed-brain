@@ -27,6 +27,7 @@ class Candidate:
     confidence: float
     summary: str
     content_len: int
+    paid: bool = False  # from the newsletter inbox
 
 
 @dataclass

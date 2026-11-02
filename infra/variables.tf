@@ -76,3 +76,27 @@ variable "fetch_proxy_secret_id" {
   type        = string
   default     = null
 }
+
+variable "aws_profile" {
+  description = "Local AWS CLI profile for the account that owns BBP's SES (set in terraform.tfvars); null = default credential chain"
+  type        = string
+  default     = null
+}
+
+variable "inbox_aws_region" {
+  description = "SES receiving region for the newsletter inbox; must not hold another active receipt rule set"
+  type        = string
+  default     = "eu-west-1"
+}
+
+variable "inbox_domain" {
+  description = "Mail domain whose every address lands in the newsletter inbox"
+  type        = string
+  default     = "in.behindbars.news"
+}
+
+variable "dns_zone_name" {
+  description = "Existing Cloud DNS zone (BBP) that holds the inbox MX record"
+  type        = string
+  default     = "bbnews"
+}

@@ -40,9 +40,11 @@ def _bulletin_row() -> Bulletin:
 class Sent:
     def __init__(self):
         self.messages = []
+        self.html = []
 
     async def __call__(self, subject, html, text, *, to=None, settings=None):  # noqa: ARG002
         self.messages.append((subject, to))
+        self.html.append(html)
         return to or "r@x.y"
 
 
@@ -171,3 +173,50 @@ async def test_email_failure_does_not_block_vault_notes(session_factory, tmp_pat
     async with session_factory() as session:
         row = await session.get(Bulletin, bulletin_id)
     assert row.published_at is not None and row.sent_at is None
+
+
+async def test_site_gets_the_public_variant_and_email_the_full_one(
+    session_factory, tmp_path, monkeypatch
+):
+    from feed_brain.models import Section, SourceRef, TopStory
+
+    sent = Sent()
+    monkeypatch.setattr(delivery, "send_email", sent)
+    paid = SourceRef(
+        name="pub.substack.com", title="Post", url="https://pub.substack.com/p/x", paid=True
+    )
+    data = BulletinData(
+        issue_date=DAY,
+        title="Titolo del giorno",
+        subtitle="",
+        editorial="Il punto.",
+        top_stories=[
+            TopStory(
+                title="Storia", text="Testo riservato.", section=Section.POLITICS, sources=[paid]
+            )
+        ],
+        sections=[],
+        radar=[],
+        articles_count=1,
+    )
+    async with session_factory() as session:
+        row = Bulletin(
+            issue_date=DAY,
+            title=data.title,
+            subtitle="",
+            editorial=data.editorial,
+            content_json=data.model_dump_json(),
+            articles_count=1,
+        )
+        session.add(row)
+        await session.commit()
+        bulletin_id = row.id
+    site, outbox = LocalStorage(tmp_path / "site"), LocalStorage(tmp_path / "outbox")
+
+    await deliver_bulletin(
+        bulletin_id, site=site, outbox=outbox, send=True, record=True, settings=SETTINGS
+    )
+
+    page = site.read_text("bulletins/2026-11-02.html")
+    assert "Storia" in page and "Testo riservato" not in page
+    assert "Testo riservato" in sent.html[0]

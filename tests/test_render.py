@@ -168,3 +168,116 @@ def test_weekly_links_are_relative_without_site_url():
         stories_count=0,
     )
     assert 'href="../bulletins/2026-10-26.html"' in render_weekly_html(weekly)
+
+
+PAID = SourceRef(
+    name="davidcarretta.substack.com",
+    title="Polonia",
+    url="https://davidcarretta.substack.com/p/polonia",
+    paid=True,
+)
+PAID_DATA = DATA.model_copy(
+    update={
+        "top_stories": [
+            TopStory(
+                title="Golpe in Polonia",
+                text="Testo tratto dal post a pagamento.",
+                section=Section.POLITICS,
+                sources=[PAID],
+                analysis=DeepAnalysis(
+                    summary="Analisi riservata.",
+                    insights=["Insight riservato"],
+                    money_quote="Citazione riservata.",
+                    actionables=["Azione riservata"],
+                ),
+            ),
+            DATA.top_stories[0],
+        ],
+        "sections": [
+            SectionBlock(
+                key=Section.POLITICS,
+                title="Politica",
+                items=[
+                    BriefItem(
+                        headline="Breve riservata", summary="Sintesi riservata.", sources=[PAID]
+                    )
+                ],
+            )
+        ],
+    }
+)
+PAID_TEXT = (
+    "Testo tratto dal post a pagamento",
+    "Analisi riservata",
+    "Insight riservato",
+    "Citazione riservata",
+    "Azione riservata",
+    "Sintesi riservata",
+)
+
+
+def test_public_page_shows_only_title_and_link_for_paid_sources():
+    html = render_bulletin_html(PAID_DATA, public=True)
+    assert "Golpe in Polonia" in html and "Breve riservata" in html
+    assert 'href="https://davidcarretta.substack.com/p/polonia"' in html
+    assert [t for t in PAID_TEXT if t in html] == []
+    assert "abbonati" in html
+    # free stories in the same issue keep their text and analysis
+    assert "Secondo Krebs" in html and "The quote." in html
+
+
+def test_email_keeps_the_paid_content():
+    html = render_bulletin_html(PAID_DATA)
+    assert [t for t in PAID_TEXT if t not in html] == []
+
+
+def test_sources_without_a_web_page_render_as_plain_text():
+    digest = SourceRef(
+        name="Newsletter", title="Weekly digest", url="mid:abc@mail.gmail.com", paid=True
+    )
+    data = DATA.model_copy(
+        update={
+            "sections": [
+                SectionBlock(
+                    key=Section.TECH,
+                    title="Tech",
+                    items=[
+                        BriefItem(headline="Digest della settimana", summary="", sources=[digest])
+                    ],
+                )
+            ],
+            "radar": [RadarItem(title="Radar digest", url="mid:def@x", source="Newsletter")],
+        }
+    )
+    html = render_bulletin_html(data)
+    assert "Digest della settimana" in html and "Newsletter: Weekly digest" in html
+    assert "Radar digest" in html
+    assert "mid:" not in html and 'href="#"' not in html
+
+
+def test_weekly_public_page_hides_arc_text_backed_by_paid_sources():
+    from feed_brain.models import BulletinRef, WeeklyArcData, WeeklyData
+    from feed_brain.services.render import render_weekly_html
+
+    weekly = WeeklyData(
+        week_start=date(2026, 10, 26),
+        week_end=date(2026, 11, 1),
+        title="La settimana",
+        subtitle="",
+        intro="Intro.",
+        arcs=[
+            WeeklyArcData(title="Arco riservato", text="Racconto riservato.", links=[PAID]),
+            WeeklyArcData(
+                title="Arco libero",
+                text="Racconto libero.",
+                links=[SourceRef(name="Krebs", title="T", url="https://k/1")],
+            ),
+        ],
+        reflection="",
+        bulletins=[BulletinRef(issue_date=date(2026, 10, 26), title="L")],
+        stories_count=2,
+    )
+    public = render_weekly_html(weekly, public=True)
+    assert "Arco riservato" in public and "Racconto riservato" not in public
+    assert "Racconto libero" in public
+    assert "Racconto riservato" in render_weekly_html(weekly)

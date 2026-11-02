@@ -20,3 +20,11 @@ output "image_repository" {
 output "job_name" {
   value = google_cloud_run_v2_job.feed_brain.name
 }
+
+output "inbox_address" {
+  value = "newsletter@${var.inbox_domain}"
+}
+
+output "inbox_bucket" {
+  value = aws_s3_bucket.inbox.id
+}

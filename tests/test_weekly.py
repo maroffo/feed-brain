@@ -178,3 +178,27 @@ async def test_weekly_title_falls_back_when_blank(session_factory):
 
     digest = await generate_weekly(MONDAY, gemini=Blank())
     assert digest.title == "La settimana del 26 ottobre 2026"
+
+
+def test_a_story_with_any_paid_source_gives_a_paid_weekly_link():
+    """The daily page hides such a story's text, so the weekly arc built on it must too."""
+    from feed_brain.services.weekly import _prompt
+
+    free = SourceRef(name="RSS", title="A", url="https://a/1")
+    paid = SourceRef(name="Sub", title="B", url="https://b.substack.com/p/1", paid=True)
+    day = BulletinData(
+        issue_date=date(2026, 11, 2),
+        title="T",
+        subtitle="",
+        editorial="",
+        top_stories=[
+            TopStory(
+                title="S", text="Sintesi riservata", section=Section.POLITICS, sources=[free, paid]
+            )
+        ],
+        sections=[],
+        radar=[],
+        articles_count=2,
+    )
+    _, refs = _prompt([day])
+    assert (refs[0].url, refs[0].paid) == ("https://a/1", True)

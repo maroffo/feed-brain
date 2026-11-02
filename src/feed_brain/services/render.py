@@ -31,6 +31,12 @@ def md_url(url: str) -> str:
     return safe_url(url).replace("(", "%28").replace(")", "%29").replace(" ", "%20")
 
 
+def md_link(label: str, url: str) -> str:
+    """Markdown link, or the bare label when the target is no web page (newsletter digest)."""
+    target = md_url(url)
+    return f"[{md_text(label)}]({target})" if target != "#" else md_text(label)
+
+
 _env = Environment(
     loader=PackageLoader("feed_brain", "templates"),
     autoescape=select_autoescape(enabled_extensions=("html",), default_for_string=False),
@@ -42,10 +48,16 @@ _env.filters["paragraphs"] = paragraphs
 _env.filters["safe_url"] = safe_url
 _env.filters["md_text"] = md_text
 _env.filters["md_url"] = md_url
+_env.filters["md_link"] = md_link
 
 
-def render_bulletin_html(data: BulletinData, site_url: str | None = None) -> str:
-    """Single-column, inline-styled page that also works as an email body."""
+def render_bulletin_html(
+    data: BulletinData, site_url: str | None = None, *, public: bool = False
+) -> str:
+    """Single-column, inline-styled page that also works as an email body.
+
+    public=True is the site variant: stories backed by paid sources keep title and link only.
+    """
     day = italian_date(data.issue_date)
     return _env.get_template("bulletin.html").render(
         data=data,
@@ -53,6 +65,7 @@ def render_bulletin_html(data: BulletinData, site_url: str | None = None) -> str
         page_title=f"{data.title} · {day}",
         kicker=f"Bollettino · {day}",
         site_url=site_url,
+        public=public,
     )
 
 
@@ -75,13 +88,17 @@ def write_bulletin_files(
     return html_path, md_path
 
 
-def render_weekly_html(data: WeeklyData, site_url: str | None = None) -> str:
+def render_weekly_html(
+    data: WeeklyData, site_url: str | None = None, *, public: bool = False
+) -> str:
+    """Weekly recap page/email; public=True hides arc text backed by paid sources."""
     title_range = f"{italian_date(data.week_start)} - {italian_date(data.week_end)}"
     return _env.get_template("weekly.html").render(
         data=data,
         page_title=f"{data.title} · {title_range}",
         kicker=f"Settimana · {title_range}",
         site_url=site_url,
+        public=public,
     )
 
 

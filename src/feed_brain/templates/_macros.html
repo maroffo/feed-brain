@@ -1,0 +1,18 @@
+{#- ABOUTME: Shared macros for the HTML templates: links that may have no web page, source lists. -#}
+{#- ABOUTME: A target that is not http(s) (newsletter digest, hostile feed URL) renders as plain text. -#}
+{% macro link(url, text, cls="") -%}
+{%- set href = url | safe_url -%}
+{%- if href != "#" -%}
+<a{% if cls %} class="{{ cls }}"{% endif %} href="{{ href }}">{{ text }}</a>
+{%- else -%}
+<span{% if cls %} class="{{ cls }}"{% endif %}>{{ text }}</span>
+{%- endif -%}
+{%- endmacro %}
+{% macro sources(refs) -%}
+<div class="src">
+{%- for s in refs %}{{ link(s.url, s.name ~ ": " ~ s.title) }}{% if not loop.last %} · {% endif %}{% endfor -%}
+</div>
+{%- endmacro %}
+{% macro reserved_note() -%}
+<p class="muted">Contenuto per abbonati: leggilo alla fonte.</p>
+{%- endmacro %}

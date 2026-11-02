@@ -164,3 +164,20 @@ async def test_sync_feed_sources_dedups_repeated_urls(db_session):
     stats = await sync_feed_sources(db_session, feeds, deactivate_missing=False)
     await db_session.commit()
     assert stats.imported == 1
+
+
+async def test_sync_never_deactivates_newsletter_inbox_sources(db_session):
+    """Email sources are created by the inbox, not the OPML, so the OPML cannot retire them."""
+    from feed_brain.db.models import FeedSource
+    from feed_brain.services.opml import sync_feed_sources
+
+    inbox_source = FeedSource(name="Burioni", url="email:burioni@substack.com", feed_type="email")
+    rss = FeedSource(name="Gone", url="https://gone.example/feed")
+    db_session.add_all([inbox_source, rss])
+    await db_session.commit()
+
+    stats = await sync_feed_sources(db_session, [], deactivate_missing=True)
+
+    assert stats.deactivated == 1
+    assert inbox_source.active is True
+    assert rss.active is False

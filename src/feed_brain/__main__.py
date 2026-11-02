@@ -140,12 +140,13 @@ async def _run_integrate() -> None:
         await _shutdown()
 
 
-def cmd_collect(_args: argparse.Namespace) -> None:
-    """Sync feeds from the bucket OPML (when DATA_BUCKET is set), fetch, triage."""
-    asyncio.run(_run_collect())
+def cmd_collect(args: argparse.Namespace) -> None:
+    """Sync feeds from the bucket OPML (when DATA_BUCKET is set), fetch, read the newsletter
+    inbox (when INBOX_BUCKET is set), triage. --dry-run leaves the inbox mails in place."""
+    asyncio.run(_run_collect(dry_run=args.dry_run))
 
 
-async def _run_collect() -> None:
+async def _run_collect(dry_run: bool = False) -> None:
     try:
         from feed_brain.config import get_settings
         from feed_brain.services.pipeline import collect
@@ -153,7 +154,7 @@ async def _run_collect() -> None:
 
         settings = get_settings()
         opml_store = GcsStorage.from_name(settings.data_bucket) if settings.data_bucket else None
-        await collect(opml_store, settings)
+        await collect(opml_store, settings, dry_run=dry_run)
     finally:
         await _shutdown()
 
@@ -420,7 +421,12 @@ def main() -> None:
     subparsers.add_parser("integrate", help="Push high-tier articles to Second Brain")
 
     # collect
-    subparsers.add_parser("collect", help="Fetch feeds and triage new articles")
+    collect_parser = subparsers.add_parser(
+        "collect", help="Fetch feeds, read the newsletter inbox, triage new articles"
+    )
+    collect_parser.add_argument(
+        "--dry-run", action="store_true", help="Read the newsletter inbox without deleting mails"
+    )
 
     # bulletin
     bulletin_parser = subparsers.add_parser(

@@ -54,6 +54,14 @@ class Settings(BaseSettings):
     # Proxy for sites that block cloud IPs, e.g. socks5://user:pass@<nordvpn-server>:1080
     fetch_proxy: SecretStr | None = None
 
+    # Newsletter inbox (SES → S3). No bucket = no inbox. On Cloud Run the job assumes
+    # INBOX_ROLE_ARN with its Google identity; without a role the default AWS chain applies.
+    inbox_bucket: str | None = None
+    inbox_region: str = "eu-west-1"
+    inbox_role_arn: str | None = None
+    inbox_audience: str = "feed-brain-inbox"
+    inbox_max_per_run: int = 50
+
     # Daily bulletin
     candidate_window_hours: int = 36
     top_stories: int = 10

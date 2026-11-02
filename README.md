@@ -1,13 +1,14 @@
 # feed-brain
 
-A personal RSS digest. Every morning a Cloud Run Job reads the feeds from an OPML file, triages each new article against an interest profile, groups the articles that cover the same story, ranks the stories, writes an Italian bulletin and emails it. A static archive page is published at the same time. On Sunday a weekly recap follows. A small sync on the Mac brings the bulletin, the recap and the best articles into an Obsidian vault.
+A personal RSS digest. Every morning a Cloud Run Job reads the feeds from an OPML file and the newsletters forwarded to its inbox, triages each new article against an interest profile, groups the articles that cover the same story, ranks the stories, writes an Italian bulletin and emails it. A static archive page is published at the same time. On Sunday a weekly recap follows. A small sync on the Mac brings the bulletin, the recap and the best articles into an Obsidian vault.
 
 ## How it works
 
 ```
 Cloud Scheduler 06:30 Europe/Rome
   └─ Cloud Run Job `feed-brain run`
-       1. collect   OPML (GCS) → fetch + extract → triage (Gemini Flash: tier, section, vault category)
+       1. collect   OPML (GCS) → fetch + extract; newsletter inbox (SES → S3) → articles
+                    → triage (Gemini Flash: tier, section, vault category)
        2. bulletin  candidates (last 36h, high/medium + threat radar)
                     → cluster per section (Gemini) → rank (tier + multi-source boost + confidence)
                     → deep analysis of the top 10 leads (Claude Opus 5.5, optional)
@@ -22,11 +23,12 @@ Mac (launchd, hourly)
 - **Interest profile**: `src/feed_brain/interests.md`, plain Markdown injected into the triage prompt. Edit it to change what counts as high, medium or low.
 - **Ranking**: `score = tier weight (high 2, medium 1) + source boost (2 feeds 0.5, 3 feeds 0.8, 4+ 1.0) + confidence`.
 - **Idempotency**: one bulletin per day (`--force` regenerates); each article is covered once; `published_at` / `sent_at` make job retries safe.
+- **Newsletter inbox**: paid newsletters forwarded from Gmail to any address on `in.behindbars.news` land in S3 (SES receiving, eu-west-1) and become articles during `collect`. Tracking links are decoded offline and reduced to the clean post URL (they carry personal tokens); only text is stored. Forwarded newsletters are always bulletin candidates. On the public page their stories show title and link only; email and vault keep everything.
 - **Vault**: the bulletin and recap notes go to `Digests/`; the leads of the top stories (high tier, confidence ≥ 0.8) are appended to the Second Brain topic notes, once per URL.
 
 ## Stack
 
-Python 3.13, uv, SQLAlchemy 2 async + asyncpg, Alembic, Postgres 15 (a database on a shared Cloud SQL instance), Gemini (`google-genai`, structured output), Anthropic SDK (Opus 5.5 with server-side refusal fallbacks), Jinja2, AWS SES SMTP, Google Cloud Storage, Terraform.
+Python 3.13, uv, SQLAlchemy 2 async + asyncpg, Alembic, Postgres 15 (a database on a shared Cloud SQL instance), Gemini (`google-genai`, structured output), Anthropic SDK (Opus 5.5 with server-side refusal fallbacks), Jinja2, AWS SES (SMTP out, receiving in), S3 via boto3 with keyless Google → AWS web-identity federation, Google Cloud Storage, Terraform.
 
 ## Local development
 
@@ -54,7 +56,7 @@ make test-e2e    # Alembic + asyncpg integration tests on the docker Postgres
 | Command | What it does |
 |---------|--------------|
 | `run [--dry-run] [--to EMAIL]` | Scheduled entry point: migrate, collect, bulletin, deliver, weekly if due. Non-zero exit if any step failed (the others still run) |
-| `collect` | Sync feeds from the GCS OPML (when `DATA_BUCKET` is set), fetch, triage |
+| `collect [--dry-run]` | Sync feeds from the GCS OPML (when `DATA_BUCKET` is set), fetch, read the newsletter inbox (when `INBOX_BUCKET` is set; `--dry-run` keeps the mails), triage |
 | `bulletin [--date] [--force] [--out]` | Generate (or reuse) the day's bulletin and render it locally |
 | `weekly [--week YYYY-Www] [--force] [--out]` | Generate the recap for a week (default: the week that is due) |
 | `sync-vault [--outbox DIR] [--vault DIR] [--no-opml]` | Mac side of the vault bridge |
@@ -77,7 +79,10 @@ All settings come from environment variables (`.env` locally, job spec and Secre
 | `SES_USR`, `SES_PWD`, `SENDER_EMAIL`, `DIGEST_RECIPIENT` | unset | Email via SES SMTP |
 | `TOP_STORIES`, `SECTION_CAP`, `RADAR_CAP`, `CANDIDATE_WINDOW_HOURS` | 10, 6, 15, 36 | Bulletin shape |
 | `VAULT_PATH`, `LOCAL_OPML_PATH` | iCloud vault, `~/Documents/Feeds.opml` | Mac sync only |
-| `FETCH_PROXY` | unset | Proxy for sites that block cloud IPs (403/419/429 get one retry through it), e.g. `socks5://user:pass@host:1080` |
+| `FETCH_PROXY` | unset | Proxy for sites that block cloud IPs (403/419/429 and network errors get one retry through it), e.g. `socks5://user:pass@host:1080` |
+| `INBOX_BUCKET`, `INBOX_REGION` | unset, `eu-west-1` | Newsletter inbox bucket (no bucket = no inbox) |
+| `INBOX_ROLE_ARN`, `INBOX_AUDIENCE` | unset, `feed-brain-inbox` | Cloud Run: AWS role assumed with the job's Google identity. Unset locally: the default AWS chain (`AWS_PROFILE`) |
+| `INBOX_MAX_PER_RUN` | 50 | Mails read per run |
 
 ## Deployment runbook (GCP)
 
@@ -108,13 +113,14 @@ The stack lives in `infra/` with its own Terraform state. Shared BehindBarsPulse
    printf '%s' "$ANTHROPIC_API_KEY" | gcloud secrets create feed-brain-anthropic-api-key \
      --project playground-maroffo --replication-policy automatic --data-file=-
    ```
-7. **Proxy for blocked feeds** (optional): some sites (Hacker News, Ransom Feed) refuse Google Cloud IPs. With NordVPN, take the *service credentials* (Nord Account → NordVPN → manual setup) and a SOCKS5 server, then:
+7. **Proxy for blocked feeds** (optional): some sites (Hacker News item pages, tumblr) refuse Google Cloud IPs. With NordVPN, take the *service credentials* (Nord Account → NordVPN → manual setup) and a SOCKS5 server, then:
    ```bash
    printf '%s' 'socks5://SERVICE_USER:SERVICE_PASS@amsterdam.nl.socks.nordhold.net:1080' | \
      gcloud secrets create feed-brain-fetch-proxy --project playground-maroffo --replication-policy automatic --data-file=-
    ```
    and set `fetch_proxy_secret_id = "feed-brain-fetch-proxy"` in `terraform.tfvars`, then apply.
-8. **Mac sync**: `gcloud auth application-default login`, put `DATA_BUCKET=<terraform output data_bucket>` in `.env`, then
+8. **Newsletter inbox**: set `aws_profile` in `terraform.tfvars` to the AWS CLI profile of the account that owns the SES domain, then apply: it creates the S3 bucket, an SES receipt rule set active in `inbox_aws_region` (SES allows one active set per region: pick one no other workload uses), the IAM role the job assumes, and the `in.behindbars.news` MX record. In Gmail: Settings → Forwarding → add `newsletter@in.behindbars.news` (the confirmation mail lands in the bucket; collect leaves it there), then a filter per sender with "Forward to".
+9. **Mac sync**: `gcloud auth application-default login`, put `DATA_BUCKET=<terraform output data_bucket>` in `.env`, then
    ```bash
    cp ops/launchd/it.maroffo.feed-brain.sync-vault.plist ~/Library/LaunchAgents/
    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/it.maroffo.feed-brain.sync-vault.plist

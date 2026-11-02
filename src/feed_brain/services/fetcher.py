@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 from sqlalchemy import select
 
 from feed_brain.config import Settings, get_settings
-from feed_brain.db.models import Article, FeedSource
+from feed_brain.db.models import RSS_FEED_TYPE, Article, FeedSource
 from feed_brain.db.session import get_session_factory
 from feed_brain.services import http
 from feed_brain.services.extractor import extract_content
@@ -56,7 +56,11 @@ async def fetch_all_feeds() -> int:
 
     # Load sources
     async with session_factory() as session:
-        result = await session.execute(select(FeedSource).where(FeedSource.active.is_(True)))
+        result = await session.execute(
+            select(FeedSource).where(
+                FeedSource.active.is_(True), FeedSource.feed_type == RSS_FEED_TYPE
+            )
+        )
         sources = result.scalars().all()
         # Collect existing URLs to skip duplicates
         existing_result = await session.execute(select(Article.url))

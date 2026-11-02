@@ -1,6 +1,7 @@
-# ABOUTME: Scheduled daily run: collect → bulletin → deliver → weekly recap if due → deliver.
+# ABOUTME: Scheduled daily run: collect (RSS + newsletter inbox) → bulletin → deliver → weekly if due.
 # ABOUTME: Steps are isolated (one failure does not skip the rest); returns failed step names for the exit code.
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import date, timedelta
 from pathlib import Path
@@ -14,6 +15,7 @@ from feed_brain.services.analyzer import make_client
 from feed_brain.services.bulletin import generate_bulletin
 from feed_brain.services.delivery import deliver_bulletin, deliver_weekly
 from feed_brain.services.fetcher import fetch_all_feeds
+from feed_brain.services.inbox import S3Mailbox, ingest_inbox
 from feed_brain.services.opml import parse_opml, sync_feed_sources
 from feed_brain.services.storage import GcsStorage, LocalStorage, Storage
 from feed_brain.services.triage import triage_new_articles
@@ -32,8 +34,12 @@ def stores(settings: Settings, dry_run: bool) -> tuple[Storage, Storage, Storage
     return GcsStorage.from_name(settings.site_bucket), data, data
 
 
-async def collect(opml_store: Storage | None, settings: Settings) -> None:
-    """Refresh feeds from the bucket OPML (if any), fetch, triage."""
+async def collect(opml_store: Storage | None, settings: Settings, *, dry_run: bool = False) -> None:
+    """Refresh feeds from the bucket OPML (if any), fetch, read the newsletter inbox, triage.
+
+    An inbox failure does not hold back RSS triage; it is re-raised afterwards so the step
+    still fails. Dry runs read the inbox without deleting from it.
+    """
     if opml_store is not None:
         text = opml_store.read_text(settings.opml_object)
         if text:
@@ -45,8 +51,18 @@ async def collect(opml_store: Storage | None, settings: Settings) -> None:
         else:
             log.warning("opml_missing", object=settings.opml_object)
     new = await fetch_all_feeds()
+    inbox_error: Exception | None = None
+    if settings.inbox_bucket:
+        try:
+            mailbox = await asyncio.to_thread(S3Mailbox.from_settings, settings)
+            await ingest_inbox(mailbox, settings, delete=not dry_run)
+        except Exception as e:  # noqa: BLE001 - re-raised after triage
+            log.exception("inbox_failed", error=str(e))
+            inbox_error = e
     triaged = await triage_new_articles()
     log.info("collect_done", new_articles=new, triaged=triaged)
+    if inbox_error is not None:
+        raise inbox_error
 
 
 async def run_daily(*, today: date, dry_run: bool, to: str | None, settings: Settings) -> list[str]:
@@ -68,7 +84,7 @@ async def run_daily(*, today: date, dry_run: bool, to: str | None, settings: Set
         return ["config"]
 
     send, record = not dry_run, not dry_run
-    await step("collect", lambda: collect(opml_store, settings))
+    await step("collect", lambda: collect(opml_store, settings, dry_run=dry_run))
 
     bulletin = await step("bulletin", lambda: generate_bulletin(today, anthropic=make_client()))
     if bulletin is not None:

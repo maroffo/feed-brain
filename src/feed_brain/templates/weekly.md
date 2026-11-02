@@ -18,7 +18,7 @@ source: feed-brain
 
 {{ arc.text }}
 
-{% for s in arc.links %}- {{ s.name }}: [{{ s.title | md_text }}]({{ s.url | md_url }})
+{% for s in arc.links %}- {{ s.name }}: {{ s.title | md_link(s.url) }}
 {% endfor %}
 
 {% endfor %}

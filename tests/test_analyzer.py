@@ -197,3 +197,12 @@ async def test_analysis_output_is_cleaned_of_control_chars():
     client = _client(_response(dirty))
     result = await analyze_article(_article(), client, SETTINGS)
     assert result == DeepAnalysis(summary="ab", insights=["c"], money_quote="q", actionables=["d"])
+
+
+async def test_analyzed_article_is_delimited_untrusted_data():
+    client = _client(_response(ANALYSIS))
+    await analyze_article(_article(), client, SETTINGS)
+    kwargs = client.beta.messages.parse.call_args.kwargs
+    content = kwargs["messages"][0]["content"]
+    assert content.startswith("<article>\n") and content.endswith("\n</article>")
+    assert "untrusted" in kwargs["system"]

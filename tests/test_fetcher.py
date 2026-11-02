@@ -172,3 +172,28 @@ async def test_feed_download_uses_the_feed_user_agent():
         await _fetch_single_feed(source, MockSettings(), existing_urls=set())
 
     assert client.call_args.kwargs["headers"] == {"User-Agent": "test"}
+
+
+async def test_fetch_all_feeds_downloads_only_rss_sources(session_factory, monkeypatch):
+    """Newsletter inbox sources have no feed URL to download."""
+    from feed_brain.services import fetcher
+
+    async with session_factory() as session:
+        session.add_all(
+            [
+                FeedSource(name="RSS", url="https://rss.example/feed", feed_type="rss"),
+                FeedSource(name="Inbox", url="email:x@example.com", feed_type="email"),
+            ]
+        )
+        await session.commit()
+
+    fetched: list[str] = []
+
+    async def fake_fetch(source, settings, existing_urls):  # noqa: ARG001
+        fetched.append(source.name)
+        return fetcher.FeedResult(source_name=source.name)
+
+    monkeypatch.setattr(fetcher, "_fetch_single_feed", fake_fetch)
+    await fetcher.fetch_all_feeds()
+
+    assert fetched == ["RSS"]

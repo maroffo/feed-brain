@@ -85,7 +85,8 @@ async def deliver_bulletin(
     day = data.issue_date.isoformat()
 
     if row.published_at is None or not record:
-        site.write_text(f"bulletins/{day}.html", html, HTML)
+        page = render_bulletin_html(data, settings.site_url, public=True)
+        site.write_text(f"bulletins/{day}.html", page, HTML)
         await publish_index(site)
         if record:
             await _stamp(Bulletin, bulletin_id, published_at=datetime.now(UTC))
@@ -124,7 +125,8 @@ async def deliver_weekly(
     label = iso_week_label(data)
 
     if row.published_at is None or not record:
-        site.write_text(f"weekly/{label}.html", html, HTML)
+        page = render_weekly_html(data, settings.site_url, public=True)
+        site.write_text(f"weekly/{label}.html", page, HTML)
         await publish_index(site)
         if record:
             await _stamp(WeeklyDigest, digest_id, published_at=datetime.now(UTC))
