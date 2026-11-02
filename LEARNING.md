@@ -106,3 +106,25 @@ cleaned = await asyncio.to_thread(_extract_with_readability, html)
 - **Semaphore + session-per-task**: Clean pattern for bounded concurrent DB work in async Python.
 - **Download-then-parse**: Decouple HTTP fetching (async, can be concurrent) from parsing (CPU-bound, needs thread). Don't let libraries do their own I/O inside your async code.
 - **Structured output with Pydantic schema**: Ollama's `format=Model.model_json_schema()` is cleaner than prompt-engineering JSON output and parsing it yourself.
+
+## 2026-11-02: Cloud newsletter (Cloud Run Job, Postgres, Gemini, Opus)
+
+feed-brain became a cloud service modeled on BehindBarsPulse: a daily Italian bulletin and a Sunday recap, built by a Cloud Run Job, emailed and published as a static page, with a launchd sync back into the vault. The architecture section above describes the pre-2026-11 CLI; README.md and CLAUDE.md describe the current one.
+
+| Decision | Why | Trade-off |
+|----------|-----|-----------|
+| Postgres (shared Cloud SQL instance, own DB) + Alembic | Cloud Run disk is ephemeral; marginal cost zero | Shared db-f1-micro: pool 2, no overflow |
+| Gemini Flash for triage/clustering/writing | Ollama can't run on Cloud Run; structured output is reliable | Preview model names churn (env-overridable) |
+| Opus 5.5 only on the 10 top-story leads | Depth where it matters, cost bounded | No deep analysis until the Anthropic secret exists |
+| One clustering call per section + pure ranking | One huge call drops/hallucinates ids; ranking stays testable | Cross-section stories are not merged |
+| Self-contained BulletinData JSON per issue | Render and weekly never re-join articles | Schema changes need defaults for old rows |
+| Vault via GCS outbox + launchd sync | The job can't reach the iCloud vault | Notes arrive when the Mac is on |
+
+### Lessons
+
+- **LLMs emit NUL bytes.** Gemini returned `\x00` inside an Italian summary; Postgres rejected the UPDATE and, because the loop shared one session, the whole triage aborted. Everything from feeds or LLMs now goes through `clean_text`, and triage works on immutable snapshots with per-article commit/rollback. The unit tests on SQLite could not have caught it: only the real run did.
+- **Patch the cache, not the function.** A test fixture that monkeypatched `get_session_factory` silently missed modules that imported the function by name, so tests hit the real local Postgres. Seeding the module-level `_session_factory` fixes every import style.
+- **Gmail clips HTML over 102 KB.** The first real bulletin rendered at 158 KB. A per-section cap plus moving repeated inline styles into a `<style>` block brought it to 69 KB.
+- **The old integration rule did not survive the new profile.** "High tier, confidence ≥ 0.8" queued 70 vault entries in one day once the profile matched the OPML; entries are now limited to the top-story leads.
+- **Destructive steps go last.** `--force` used to delete the old issue before regenerating; a failed regeneration lost the bulletin. The replacement now happens in the same transaction as the insert.
+- **Feed URLs are untrusted.** `href` values pass through `safe_url` (http/https only) and Markdown links escape brackets and parentheses.
