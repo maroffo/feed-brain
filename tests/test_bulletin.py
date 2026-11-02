@@ -420,3 +420,34 @@ async def test_articles_from_the_newsletter_inbox_are_marked_paid(session_factor
     assert paid == {"paid-post": True, "free-post": False}
     refs = _sources(Story(section="politics", articles=candidates, headline="h"))
     assert {r.title: r.paid for r in refs} == paid
+
+
+async def test_forwarded_newsletters_are_candidates_whatever_their_tier(session_factory):
+    """Max picked every forwarded newsletter by hand, so a low triage tier must not drop it."""
+    from feed_brain.services.bulletin import _load_candidates
+
+    now = datetime.now(UTC)
+    async with session_factory() as session:
+        inbox = FeedSource(name="Polpette", url="email:vanz@substack.com", feed_type="email")
+        rss = FeedSource(name="Il Post", url="https://post/feed")
+        session.add_all([inbox, rss])
+        await session.flush()
+        for title, source in (("low-newsletter", inbox), ("low-rss", rss)):
+            session.add(
+                Article(
+                    url=f"https://x/{title}",
+                    title=title,
+                    source_id=source.id,
+                    content="body",
+                    status="triaged",
+                    tier="low",
+                    section="culture",
+                    confidence=0.5,
+                    summary="s.",
+                    fetched_at=now,
+                )
+            )
+        await session.commit()
+        candidates = await _load_candidates(session, window_hours=36)
+
+    assert [c.title for c in candidates] == ["low-newsletter"]

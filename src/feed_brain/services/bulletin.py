@@ -184,7 +184,12 @@ async def _load_candidates(
             ),
             scope,
             Article.section.isnot(None),
-            or_(Article.tier.in_([Tier.HIGH, Tier.MEDIUM]), Article.section == THREAT_RADAR),
+            or_(
+                Article.tier.in_([Tier.HIGH, Tier.MEDIUM]),
+                Article.section == THREAT_RADAR,
+                # Forwarded newsletters were picked by hand: the tier only ranks them.
+                FeedSource.feed_type == EMAIL_FEED_TYPE,
+            ),
         )
         .order_by(Article.id)
     )
