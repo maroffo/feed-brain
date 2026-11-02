@@ -17,7 +17,7 @@ from feed_brain.services.analyzer import (
 
 def _mock_anthropic_response(data: dict) -> MagicMock:
     """Create a mock Anthropic API response."""
-    content_block = MagicMock()
+    content_block = MagicMock(type="text")
     content_block.text = json.dumps(data)
     response = MagicMock()
     response.content = [content_block]
@@ -59,7 +59,7 @@ async def test_analyze_article_invalid_json():
         url="https://example.com/bad", title="Bad", content="content", status="triaged", tier="high"
     )
 
-    content_block = MagicMock()
+    content_block = MagicMock(type="text")
     content_block.text = "Not valid JSON"
     response = MagicMock()
     response.content = [content_block]

@@ -1,5 +1,5 @@
 # ABOUTME: Concurrent RSS feed fetcher with age cutoff and volume control.
-# ABOUTME: Fetches feeds concurrently, writes to DB sequentially (SQLite single-writer).
+# ABOUTME: Fetches feeds concurrently, then writes new articles in a single session.
 
 import asyncio
 import contextlib
@@ -44,7 +44,7 @@ async def fetch_all_feeds() -> int:
     """Fetch articles from all active feed sources concurrently.
 
     HTTP fetching and content extraction run in parallel.
-    DB writes are serialized to avoid SQLite locking.
+    DB writes happen afterwards in one session (one AsyncSession is not task-safe).
     Returns the number of new articles stored.
     """
     settings = get_settings()
@@ -76,14 +76,14 @@ async def fetch_all_feeds() -> int:
     # Collect all articles from successful fetches
     all_articles: list[FetchedArticle] = []
     for i, r in enumerate(results):
-        if isinstance(r, Exception):
+        if isinstance(r, BaseException):
             log.error("feed_fetch_exception", name=sources[i].name, error=str(r))
         elif r.error:
             pass  # Already logged in _fetch_single_feed
         else:
             all_articles.extend(r.articles)
 
-    # Write all articles to DB sequentially (SQLite single-writer)
+    # Write all articles in one session
     total_new = 0
     if all_articles:
         async with session_factory() as session:

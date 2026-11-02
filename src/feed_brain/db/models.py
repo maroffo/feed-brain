@@ -18,8 +18,11 @@ class FeedSource(Base):
     name: Mapped[str] = mapped_column(String(255))
     url: Mapped[str] = mapped_column(String(2048), unique=True)
     feed_type: Mapped[str] = mapped_column(String(20), default="rss")
+    folder: Mapped[str | None] = mapped_column(String(255))  # OPML folder, triage hint
     active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
 
     articles: Mapped[list["Article"]] = relationship(back_populates="source")
 
@@ -30,6 +33,7 @@ class Article(Base):
         Index("ix_articles_tier", "tier"),
         Index("ix_articles_status", "status"),
         Index("ix_articles_fetched_at", "fetched_at"),
+        Index("ix_articles_section", "section"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -38,15 +42,16 @@ class Article(Base):
     author: Mapped[str | None] = mapped_column(String(255))
     source_id: Mapped[int | None] = mapped_column(ForeignKey("feed_sources.id"))
     content: Mapped[str | None] = mapped_column(Text)
-    published_date: Mapped[datetime | None] = mapped_column(DateTime)
+    published_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Pipeline status
     status: Mapped[str] = mapped_column(String(20), default="new")
 
-    # Triage (Ollama)
+    # Triage
     summary: Mapped[str | None] = mapped_column(Text)
     tier: Mapped[str | None] = mapped_column(String(20))
-    category: Mapped[str | None] = mapped_column(String(50))
+    section: Mapped[str | None] = mapped_column(String(30))  # bulletin section
+    category: Mapped[str | None] = mapped_column(String(50))  # vault topic routing
     reason: Mapped[str | None] = mapped_column(Text)
     confidence: Mapped[float | None] = mapped_column(Float)
 
@@ -57,16 +62,18 @@ class Article(Base):
     actionables: Mapped[str | None] = mapped_column(Text)  # JSON array
 
     # Integration
-    integrated_at: Mapped[datetime | None] = mapped_column(DateTime)
+    integrated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     integration_target: Mapped[str | None] = mapped_column(String(500))
 
     # Legacy feedback (kept for data compat)
     feedback: Mapped[str | None] = mapped_column(String(20))
     clipping_created: Mapped[bool] = mapped_column(Boolean, default=False)
-    feedback_at: Mapped[datetime | None] = mapped_column(DateTime)
+    feedback_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Timestamps
-    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
-    classified_at: Mapped[datetime | None] = mapped_column(DateTime)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    classified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     source: Mapped[FeedSource | None] = relationship(back_populates="articles")

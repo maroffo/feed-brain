@@ -48,3 +48,20 @@ async def test_unique_url_constraint(db_session):
 
     with pytest.raises(IntegrityError):
         await db_session.flush()
+
+
+async def test_folder_and_section_persist(db_session):
+    """FeedSource.folder and Article.section round-trip through the ORM."""
+    source = FeedSource(name="Krebs", url="https://krebs.example/feed", folder="0. Security")
+    db_session.add(source)
+    await db_session.flush()
+    source_id = source.id
+    db_session.add(
+        Article(url="https://krebs.example/a", title="A", source_id=source_id, section="security")
+    )
+    await db_session.commit()
+    db_session.expire_all()
+
+    article = (await db_session.execute(select(Article))).scalar_one()
+    assert article.section == "security"
+    assert (await db_session.get(FeedSource, source_id)).folder == "0. Security"

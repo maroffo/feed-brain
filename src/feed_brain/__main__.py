@@ -1,5 +1,5 @@
 # ABOUTME: CLI entry point for feed-brain with full pipeline commands.
-# ABOUTME: Supports fetch, triage, analyze, integrate, digest, run, list, reset, and import-opml.
+# ABOUTME: Supports migrate, fetch, triage, analyze, integrate, run, list, reset, import-opml.
 
 import argparse
 import asyncio
@@ -26,19 +26,18 @@ _configure_logging()
 log = structlog.get_logger()
 
 
-async def _init() -> None:
-    """Initialize database and run migrations."""
-    from feed_brain.db.session import init_db, migrate_db
-
-    await init_db()
-    await migrate_db()
-
-
 async def _shutdown() -> None:
     """Clean up database connections."""
     from feed_brain.db.session import close_db
 
     await close_db()
+
+
+def cmd_migrate(_args: argparse.Namespace) -> None:
+    """Apply pending Alembic migrations (synchronous, outside the event loop)."""
+    from feed_brain.db.migrate import upgrade_head
+
+    upgrade_head()
 
 
 def cmd_fetch(_args: argparse.Namespace) -> None:
@@ -47,7 +46,6 @@ def cmd_fetch(_args: argparse.Namespace) -> None:
 
 
 async def _run_fetch() -> None:
-    await _init()
     try:
         from feed_brain.services.fetcher import fetch_all_feeds
 
@@ -63,7 +61,6 @@ def cmd_triage(_args: argparse.Namespace) -> None:
 
 
 async def _run_triage() -> None:
-    await _init()
     try:
         from feed_brain.services.triage import triage_new_articles
 
@@ -79,7 +76,6 @@ def cmd_analyze(_args: argparse.Namespace) -> None:
 
 
 async def _run_analyze() -> None:
-    await _init()
     try:
         from feed_brain.services.analyzer import analyze_high_tier
 
@@ -95,7 +91,6 @@ def cmd_integrate(_args: argparse.Namespace) -> None:
 
 
 async def _run_integrate() -> None:
-    await _init()
     try:
         from feed_brain.services.integrator import integrate_articles
 
@@ -105,24 +100,11 @@ async def _run_integrate() -> None:
         await _shutdown()
 
 
-def cmd_digest(_args: argparse.Namespace) -> None:
-    """Generate daily digest note in the vault."""
-    asyncio.run(_run_digest())
-
-
-async def _run_digest() -> None:
-    await _init()
-    try:
-        from feed_brain.services.digest import generate_digest
-
-        count = await generate_digest()
-        log.info("digest_done", articles=count)
-    finally:
-        await _shutdown()
-
-
 def cmd_run(_args: argparse.Namespace) -> None:
-    """Full pipeline: fetch → triage → analyze → integrate → digest."""
+    """Full pipeline: fetch → triage → analyze → integrate."""
+    from feed_brain.db.migrate import upgrade_head
+
+    upgrade_head()
     asyncio.run(_run_pipeline())
 
 
@@ -134,7 +116,6 @@ async def _run_pipeline() -> None:
     from ollama import AsyncClient
     from sqlalchemy import select
 
-    await _init()
     try:
         from feed_brain.config import get_settings
         from feed_brain.db.models import Article
@@ -145,7 +126,6 @@ async def _run_pipeline() -> None:
             analyze_article,
             analyze_article_minions,
         )
-        from feed_brain.services.digest import generate_digest
         from feed_brain.services.fetcher import fetch_all_feeds
         from feed_brain.services.integrator import integrate_article
         from feed_brain.services.triage import TriageParseError, triage_article
@@ -278,10 +258,6 @@ async def _run_pipeline() -> None:
             integrated=integrated,
             errors=errors,
         )
-
-        # Step 3: Digest (once at end, covers all articles processed today)
-        digest_count = await generate_digest()
-        log.info("pipeline_digest_done", articles=digest_count)
     finally:
         await _shutdown()
 
@@ -294,7 +270,6 @@ def cmd_list(args: argparse.Namespace) -> None:
 async def _run_list(tier: str | None, limit: int) -> None:
     from sqlalchemy import select
 
-    await _init()
     try:
         from feed_brain.db.models import Article
         from feed_brain.db.session import get_session_factory
@@ -329,9 +304,10 @@ def cmd_reset(_args: argparse.Namespace) -> None:
 
 
 async def _run_reset() -> None:
-    from sqlalchemy import update
+    from typing import cast
 
-    await _init()
+    from sqlalchemy import CursorResult, update
+
     try:
         from feed_brain.db.models import Article
         from feed_brain.db.session import get_session_factory
@@ -353,6 +329,7 @@ async def _run_reset() -> None:
                 .values(
                     status=ArticleStatus.NEW,
                     tier=None,
+                    section=None,
                     category=None,
                     confidence=None,
                     summary=None,
@@ -367,8 +344,9 @@ async def _run_reset() -> None:
                 )
             )
             await session.commit()
-            log.info("reset_done", articles_reset=result.rowcount)
-            print(f"Reset {result.rowcount} articles to 'new' status.")
+            reset_count = cast(CursorResult, result).rowcount
+            log.info("reset_done", articles_reset=reset_count)
+            print(f"Reset {reset_count} articles to 'new' status.")
     finally:
         await _shutdown()
 
@@ -381,58 +359,25 @@ def cmd_import_opml(args: argparse.Namespace) -> None:
 async def _run_import_opml(filepath: str, sync: bool = False) -> None:
     from pathlib import Path
 
-    from sqlalchemy import select
-
-    await _init()
     try:
-        from feed_brain.db.models import FeedSource
         from feed_brain.db.session import get_session_factory
-        from feed_brain.services.opml import parse_opml
+        from feed_brain.services.opml import parse_opml, sync_feed_sources
 
-        content = Path(filepath).read_text(encoding="utf-8")
-        feeds = parse_opml(content)
-        opml_urls = {feed["url"] for feed in feeds}
-
-        session_factory = get_session_factory()
-        imported = 0
-        reactivated = 0
-        deactivated = 0
-
-        async with session_factory() as session:
-            # Import new feeds and reactivate existing ones in OPML
-            for feed in feeds:
-                result = await session.execute(
-                    select(FeedSource).where(FeedSource.url == feed["url"])
-                )
-                existing = result.scalar_one_or_none()
-                if existing:
-                    if not existing.active:
-                        existing.active = True
-                        reactivated += 1
-                else:
-                    session.add(FeedSource(name=feed["name"], url=feed["url"]))
-                    imported += 1
-
-            # With --sync, deactivate feeds not in OPML
-            if sync:
-                all_feeds = await session.execute(select(FeedSource))
-                for source in all_feeds.scalars().all():
-                    if source.url not in opml_urls and source.active:
-                        source.active = False
-                        deactivated += 1
-
+        feeds = parse_opml(Path(filepath).read_text(encoding="utf-8"))
+        async with get_session_factory()() as session:
+            stats = await sync_feed_sources(session, feeds, deactivate_missing=sync)
             await session.commit()
 
-        print(f"Imported {imported} new feeds (of {len(feeds)} total in OPML).")
-        if reactivated:
-            print(f"Reactivated {reactivated} feeds.")
-        if deactivated:
-            print(f"Deactivated {deactivated} feeds not in OPML.")
+        print(f"Imported {stats.imported} new feeds (of {len(feeds)} total in OPML).")
+        if stats.reactivated:
+            print(f"Reactivated {stats.reactivated} feeds.")
+        if stats.deactivated:
+            print(f"Deactivated {stats.deactivated} feeds not in OPML.")
         log.info(
             "opml_import_done",
-            imported=imported,
-            reactivated=reactivated,
-            deactivated=deactivated,
+            imported=stats.imported,
+            reactivated=stats.reactivated,
+            deactivated=stats.deactivated,
             total=len(feeds),
         )
     finally:
@@ -443,6 +388,9 @@ def main() -> None:
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(prog="feed-brain", description="AI-powered feed aggregator")
     subparsers = parser.add_subparsers(dest="command")
+
+    # migrate
+    subparsers.add_parser("migrate", help="Apply pending database migrations")
 
     # fetch
     subparsers.add_parser("fetch", help="Fetch new articles from all feeds")
@@ -456,11 +404,8 @@ def main() -> None:
     # integrate
     subparsers.add_parser("integrate", help="Push high-tier articles to Second Brain")
 
-    # digest
-    subparsers.add_parser("digest", help="Generate daily digest note in vault")
-
     # run
-    subparsers.add_parser("run", help="Full pipeline: fetch→triage→analyze→integrate→digest")
+    subparsers.add_parser("run", help="Full pipeline: fetch→triage→analyze→integrate")
 
     # list
     list_parser = subparsers.add_parser("list", help="List recent articles")
@@ -477,11 +422,11 @@ def main() -> None:
 
     args = parser.parse_args()
     commands = {
+        "migrate": cmd_migrate,
         "fetch": cmd_fetch,
         "triage": cmd_triage,
         "analyze": cmd_analyze,
         "integrate": cmd_integrate,
-        "digest": cmd_digest,
         "run": cmd_run,
         "list": cmd_list,
         "reset": cmd_reset,

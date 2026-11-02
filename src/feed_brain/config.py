@@ -3,6 +3,7 @@
 
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import quote_plus
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -25,8 +26,13 @@ class Settings(BaseSettings):
     ollama_model: str = "qwen3.5:4b"
     ollama_host: str = "http://localhost:11434"
 
-    # Database
-    db_path: Path = Path("./feed_brain.db")
+    # Database (Postgres). Local defaults match docker-compose.yml; set DB_PASSWORD=feedbrain
+    db_host: str = "localhost"
+    db_port: int = 5433
+    db_name: str = "feedbrain"
+    db_user: str = "feedbrain"
+    db_password: SecretStr | None = None
+    db_pool_size: int = 2
 
     # Feed fetching
     feed_timeout: int = 15
@@ -52,8 +58,12 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
-        """Build async SQLite connection URL."""
-        return f"sqlite+aiosqlite:///{self.db_path}"
+        """Build async PostgreSQL (asyncpg) connection URL."""
+        password = self.db_password.get_secret_value() if self.db_password else ""
+        return (
+            f"postgresql+asyncpg://{self.db_user}:{quote_plus(password)}"
+            f"@{self.db_host}:{self.db_port}/{self.db_name}"
+        )
 
 
 @lru_cache

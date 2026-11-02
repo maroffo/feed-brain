@@ -112,7 +112,7 @@ async def triage_article(
             format=TriageResult.model_json_schema(),
         )
 
-        text = response.message.content.strip()
+        text = (response.message.content or "").strip()
         log.debug("triage_raw_response", text=text[:200])
 
         data = json.loads(text)

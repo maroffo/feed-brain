@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 from anthropic import AsyncAnthropic
+from anthropic.types import Message
 from sqlalchemy import select
 
 if TYPE_CHECKING:
@@ -76,7 +77,7 @@ async def analyze_article(
             messages=[{"role": "user", "content": user_message}],
         )
 
-        text = response.content[0].text.strip() if response.content else ""
+        text = _first_text(response)
         log.debug("analyzer_raw_response", text=text[:200])
 
         # Strip markdown code fences if present
@@ -156,6 +157,14 @@ Use imperative form ("Try X", "Use Y for Z"). If purely informational, return []
 """
 
 
+def _first_text(response: Message) -> str:
+    """Return the first text block of a response, stripped, or an empty string."""
+    for block in response.content:
+        if block.type == "text":
+            return block.text.strip()
+    return ""
+
+
 def _is_arxiv(article: Article) -> bool:
     """Check if an article URL is from arXiv."""
     return "arxiv.org" in (article.url or "")
@@ -175,7 +184,7 @@ async def _decompose(title: str, abstract: str, client: AsyncAnthropic, model: s
         messages=[{"role": "user", "content": user_message}],
     )
 
-    text = response.content[0].text.strip() if response.content else "[]"
+    text = _first_text(response) or "[]"
 
     import re
 
@@ -202,7 +211,7 @@ async def _extract_answer(
         ],
     )
 
-    return response.message.content.strip()
+    return (response.message.content or "").strip()
 
 
 async def _synthesize(
@@ -225,7 +234,7 @@ async def _synthesize(
         messages=[{"role": "user", "content": user_message}],
     )
 
-    text = response.content[0].text.strip() if response.content else ""
+    text = _first_text(response)
 
     import re
 
