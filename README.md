@@ -77,6 +77,7 @@ All settings come from environment variables (`.env` locally, job spec and Secre
 | `SES_USR`, `SES_PWD`, `SENDER_EMAIL`, `DIGEST_RECIPIENT` | unset | Email via SES SMTP |
 | `TOP_STORIES`, `SECTION_CAP`, `RADAR_CAP`, `CANDIDATE_WINDOW_HOURS` | 10, 6, 15, 36 | Bulletin shape |
 | `VAULT_PATH`, `LOCAL_OPML_PATH` | iCloud vault, `~/Documents/Feeds.opml` | Mac sync only |
+| `FETCH_PROXY` | unset | Proxy for sites that block cloud IPs (403/419/429 get one retry through it), e.g. `socks5://user:pass@host:1080` |
 
 ## Deployment runbook (GCP)
 
@@ -107,7 +108,13 @@ The stack lives in `infra/` with its own Terraform state. Shared BehindBarsPulse
    printf '%s' "$ANTHROPIC_API_KEY" | gcloud secrets create feed-brain-anthropic-api-key \
      --project playground-maroffo --replication-policy automatic --data-file=-
    ```
-7. **Mac sync**: `gcloud auth application-default login`, put `DATA_BUCKET=<terraform output data_bucket>` in `.env`, then
+7. **Proxy for blocked feeds** (optional): some sites (Hacker News, Ransom Feed) refuse Google Cloud IPs. With NordVPN, take the *service credentials* (Nord Account → NordVPN → manual setup) and a SOCKS5 server, then:
+   ```bash
+   printf '%s' 'socks5://SERVICE_USER:SERVICE_PASS@amsterdam.nl.socks.nordhold.net:1080' | \
+     gcloud secrets create feed-brain-fetch-proxy --project playground-maroffo --replication-policy automatic --data-file=-
+   ```
+   and set `fetch_proxy_secret_id = "feed-brain-fetch-proxy"` in `terraform.tfvars`, then apply.
+8. **Mac sync**: `gcloud auth application-default login`, put `DATA_BUCKET=<terraform output data_bucket>` in `.env`, then
    ```bash
    cp ops/launchd/it.maroffo.feed-brain.sync-vault.plist ~/Library/LaunchAgents/
    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/it.maroffo.feed-brain.sync-vault.plist

@@ -70,3 +70,9 @@ variable "anthropic_secret_id" {
   type        = string
   default     = null
 }
+
+variable "fetch_proxy_secret_id" {
+  description = "Secret holding FETCH_PROXY (e.g. socks5://user:pass@host:1080, NordVPN service credentials); null = no proxy fallback"
+  type        = string
+  default     = null
+}

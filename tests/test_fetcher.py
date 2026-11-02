@@ -50,6 +50,7 @@ class MockSettings:
     max_articles_per_feed = 15
     feed_timeout = 5
     article_max_age_hours = 48
+    fetch_proxy = None
 
 
 async def test_fetch_extracts_new_article():
@@ -64,7 +65,7 @@ async def test_fetch_extracts_new_article():
     mock_client.__aexit__ = AsyncMock(return_value=None)
 
     with (
-        patch("feed_brain.services.fetcher.httpx.AsyncClient", return_value=mock_client),
+        patch("feed_brain.services.http.httpx.AsyncClient", return_value=mock_client),
         patch("feed_brain.services.fetcher.feedparser.parse", return_value=mock_feed),
         patch(
             "feed_brain.services.fetcher.extract_content",
@@ -93,7 +94,7 @@ async def test_fetch_skips_existing_url():
     mock_client.__aexit__ = AsyncMock(return_value=None)
 
     with (
-        patch("feed_brain.services.fetcher.httpx.AsyncClient", return_value=mock_client),
+        patch("feed_brain.services.http.httpx.AsyncClient", return_value=mock_client),
         patch("feed_brain.services.fetcher.feedparser.parse", return_value=mock_feed),
     ):
         result = await _fetch_single_feed(
@@ -117,7 +118,7 @@ async def test_fetch_handles_bozo_feed():
     mock_client.__aexit__ = AsyncMock(return_value=None)
 
     with (
-        patch("feed_brain.services.fetcher.httpx.AsyncClient", return_value=mock_client),
+        patch("feed_brain.services.http.httpx.AsyncClient", return_value=mock_client),
         patch("feed_brain.services.fetcher.feedparser.parse", return_value=mock_feed),
     ):
         result = await _fetch_single_feed(source, MockSettings(), existing_urls=set())
@@ -139,7 +140,7 @@ async def test_fetch_falls_back_to_entry_summary_when_extraction_fails():
     mock_client.__aexit__ = AsyncMock(return_value=None)
 
     with (
-        patch("feed_brain.services.fetcher.httpx.AsyncClient", return_value=mock_client),
+        patch("feed_brain.services.http.httpx.AsyncClient", return_value=mock_client),
         patch(
             "feed_brain.services.fetcher.feedparser.parse",
             return_value=_make_parsed_feed([entry, no_summary]),

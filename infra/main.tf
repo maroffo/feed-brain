@@ -62,6 +62,7 @@ locals {
       SES_PWD        = var.ses_password_secret_id
     },
     var.anthropic_secret_id == null ? {} : { ANTHROPIC_API_KEY = var.anthropic_secret_id },
+    var.fetch_proxy_secret_id == null ? {} : { FETCH_PROXY = var.fetch_proxy_secret_id },
   )
   site_url = "https://storage.googleapis.com/${google_storage_bucket.site.name}"
 }

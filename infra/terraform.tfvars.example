@@ -4,3 +4,4 @@
 image            = "europe-west1-docker.pkg.dev/playground-maroffo/feed-brain/feed-brain:TAG"
 digest_recipient = "you@example.com"
 # anthropic_secret_id = "feed-brain-anthropic-api-key"
+# fetch_proxy_secret_id = "feed-brain-fetch-proxy"

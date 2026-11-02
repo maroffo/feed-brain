@@ -15,6 +15,7 @@ from sqlalchemy import select
 from feed_brain.config import Settings, get_settings
 from feed_brain.db.models import Article, FeedSource
 from feed_brain.db.session import get_session_factory
+from feed_brain.services import http
 from feed_brain.services.extractor import extract_content
 from feed_brain.textutil import clean_text
 
@@ -133,14 +134,7 @@ async def _fetch_single_feed(
     result = FeedResult(source_name=source.name)
 
     try:
-        async with httpx.AsyncClient(
-            timeout=settings.feed_timeout,
-            headers={"User-Agent": settings.feed_user_agent},
-            follow_redirects=True,
-        ) as client:
-            response = await client.get(source.url)
-            response.raise_for_status()
-            xml_content = response.text
+        xml_content = (await http.fetch(source.url, settings)).text
     except httpx.HTTPError as e:
         log.error("feed_download_error", name=source.name, error=str(e))
         result.error = str(e)

@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     max_articles_per_feed: int = 15
     article_max_age_hours: int = 48
     fetch_concurrency: int = 10
+    # Proxy for sites that block cloud IPs, e.g. socks5://user:pass@<nordvpn-server>:1080
+    fetch_proxy: SecretStr | None = None
 
     # Daily bulletin
     candidate_window_hours: int = 36
