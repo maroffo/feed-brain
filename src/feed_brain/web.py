@@ -133,7 +133,7 @@ def create_app(settings: Settings | None = None) -> Starlette:
             undo_url=undo_url,
         )
 
-    async def healthz(_request: Request) -> Response:
+    async def health(_request: Request) -> Response:
         return PlainTextResponse("ok", headers=HEADERS)
 
     @asynccontextmanager
@@ -143,7 +143,7 @@ def create_app(settings: Settings | None = None) -> Starlette:
 
     return Starlette(
         routes=[
-            Route("/healthz", healthz, methods=["GET"]),
+            Route("/health", health, methods=["GET"]),
             Route("/v/{day}/{key}/{vote}", vote_page, methods=["GET", "POST"]),
         ],
         lifespan=lifespan,

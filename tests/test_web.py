@@ -156,8 +156,9 @@ async def test_old_issues_and_vanished_stories_are_gone(session_factory):
 
 
 async def test_health_check(session_factory):  # noqa: ARG001
+    # not /healthz: Cloud Run reserves paths ending in "z" and answers them itself with a 404
     async with _client() as client:
-        response = await client.get("/healthz")
+        response = await client.get("/health")
     assert response.status_code == 200 and response.text == "ok"
 
 
