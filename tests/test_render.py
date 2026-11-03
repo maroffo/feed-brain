@@ -370,3 +370,31 @@ def test_issues_stored_before_the_key_points_still_parse_and_render():
 def test_money_quote_is_styled_outside_the_notes_box():
     css = render_bulletin_html(DATA).split("</style>", 1)[0]
     assert ".story blockquote{" in css
+
+
+def _two_brief_issue(omitted: int) -> BulletinData:
+    block = _brief_block("Primo breve", "https://a/1")
+    second = BriefItem(
+        headline="Secondo breve",
+        summary="Sintesi.",
+        sources=[
+            SourceRef(name="Uno", title="x", url="https://b/1"),
+            SourceRef(name="Due", title="y", url="https://b/2"),
+        ],
+    )
+    block = block.model_copy(update={"items": [*block.items, second], "omitted": omitted})
+    return DATA.model_copy(update={"sections": [block, _brief_block("Altro", "https://c/1")]})
+
+
+def test_markdown_briefs_are_one_list_item_per_line_and_headings_stand_apart():
+    md = render_bulletin_md(_two_brief_issue(omitted=0))
+    assert "\n- **[Primo breve](https://a/1)** \n- **[Secondo breve](https://b/1)**" in md
+    assert "· [Due](https://b/2)\n\n## Tech\n" in md
+
+
+def test_a_single_folded_story_is_named_in_the_singular():
+    md = render_bulletin_md(_two_brief_issue(omitted=1))
+    html = render_bulletin_html(_two_brief_issue(omitted=1))
+    assert "e un'altra storia" in md and "e un&#39;altra storia" in html
+    assert "altre 1 storie" not in md + html
+    assert "e altre 4 storie" in render_bulletin_md(_two_brief_issue(omitted=4))

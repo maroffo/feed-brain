@@ -37,6 +37,11 @@ def md_link(label: str, url: str) -> str:
     return f"[{md_text(label)}]({target})" if target != "#" else md_text(label)
 
 
+def folded(count: int) -> str:
+    """Closing line of an 'In breve' section that hides `count` stories."""
+    return "e un'altra storia" if count == 1 else f"e altre {count} storie"
+
+
 _env = Environment(
     loader=PackageLoader("feed_brain", "templates"),
     autoescape=select_autoescape(enabled_extensions=("html",), default_for_string=False),
@@ -49,6 +54,7 @@ _env.filters["safe_url"] = safe_url
 _env.filters["md_text"] = md_text
 _env.filters["md_url"] = md_url
 _env.filters["md_link"] = md_link
+_env.filters["folded"] = folded
 
 
 def render_bulletin_html(

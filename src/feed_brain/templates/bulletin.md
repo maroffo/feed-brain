@@ -50,9 +50,9 @@ articles: {{ data.articles_count }}
 {% endif %}
 {% for block in data.sections %}## {{ block.title }}
 
-{% for item in block.items %}- **{{ item.headline | md_link(item.sources[0].url) }}** {{ item.summary }}{% for s in item.sources[1:] %} · {{ s.name | md_link(s.url) }}{% endfor %}
+{% for item in block.items %}- **{{ item.headline | md_link(item.sources[0].url) }}** {{ item.summary }}{% for s in item.sources[1:] %} · {{ s.name | md_link(s.url) }}{% endfor +%}
 {% endfor %}
-{% if block.omitted %}- *e altre {{ block.omitted }} storie*
+{% if block.omitted %}- *{{ block.omitted | folded }}*
 {% endif %}
 
 {% endfor %}

@@ -51,7 +51,7 @@
 {% if item.sources | length > 1 %}{{ m.sources(item.sources) }}{% else %}<span class="more"> · {{ item.sources[0].name }}</span>{% endif %}
 </div>
 {% endfor %}
-{% if block.omitted %}<div class="more">e altre {{ block.omitted }} storie</div>{% endif %}
+{% if block.omitted %}<div class="more">{{ block.omitted | folded }}</div>{% endif %}
 {% endfor %}
 
 {% endblock %}
