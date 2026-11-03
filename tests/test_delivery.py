@@ -3,6 +3,7 @@
 
 from datetime import date
 
+from pydantic import SecretStr
 from sqlalchemy import select
 
 from feed_brain.config import Settings
@@ -218,3 +219,63 @@ async def test_site_gets_the_public_variant_and_email_the_full_one(
     page = site.read_text("bulletins/2026-11-02.html")
     assert "Storia" in page and "Testo riservato" not in page
     assert "Testo riservato" in sent.html[0]
+
+
+async def test_email_gets_vote_links_only_when_the_feedback_service_is_configured(
+    session_factory, tmp_path, monkeypatch
+):
+    from feed_brain.models import Section, SourceRef, TopStory
+    from feed_brain.services.feedback import VoteLinks
+
+    sent = Sent()
+    monkeypatch.setattr(delivery, "send_email", sent)
+    data = BulletinData(
+        issue_date=DAY,
+        title="Titolo",
+        top_stories=[
+            TopStory(
+                title="Storia",
+                text="Testo.",
+                section=Section.POLITICS,
+                sources=[SourceRef(name="Il Post", title="P", url="https://ilpost/p")],
+            )
+        ],
+        sections=[],
+        articles_count=1,
+    )
+    configured = SETTINGS.model_copy(
+        update={"feedback_url": "https://fb.run.app", "feedback_key": SecretStr("k" * 32)}
+    )
+    for day, settings in ((DAY, configured), (date(2026, 11, 3), SETTINGS)):
+        issue = data.model_copy(update={"issue_date": day})
+        async with session_factory() as session:
+            row = Bulletin(
+                issue_date=day,
+                title="Titolo",
+                subtitle="",
+                editorial="",
+                content_json=issue.model_dump_json(),
+                articles_count=1,
+            )
+            session.add(row)
+            await session.commit()
+            bulletin_id = row.id
+        site, outbox = LocalStorage(tmp_path / "site"), LocalStorage(tmp_path / "outbox")
+        await deliver_bulletin(
+            bulletin_id, site=site, outbox=outbox, send=True, record=True, settings=settings
+        )
+
+    links = VoteLinks("https://fb.run.app", b"k" * 32, DAY)("https://ilpost/p")
+    assert f'href="{links["up"]}"' in sent.html[0] and f'href="{links["down"]}"' in sent.html[0]
+    assert "👍" not in site.read_text("bulletins/2026-11-02.html")
+    assert "👍" not in sent.html[1]
+
+
+def test_no_vote_links_with_a_blank_key():
+    from feed_brain.services.delivery import vote_links
+
+    data = BulletinData(issue_date=DAY, title="t", top_stories=[], sections=[], articles_count=0)
+    blank = SETTINGS.model_copy(
+        update={"feedback_url": "https://fb.run.app", "feedback_key": SecretStr("  ")}
+    )
+    assert vote_links(data, blank) is None

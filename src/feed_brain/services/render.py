@@ -1,6 +1,7 @@
 # ABOUTME: Renders bulletins and weekly recaps to HTML (page + email body) and Markdown (vault note).
 # ABOUTME: Templates live in feed_brain/templates; HTML is autoescaped, Markdown is not.
 
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -58,11 +59,17 @@ _env.filters["folded"] = folded
 
 
 def render_bulletin_html(
-    data: BulletinData, site_url: str | None = None, *, public: bool = False
+    data: BulletinData,
+    site_url: str | None = None,
+    *,
+    public: bool = False,
+    votes: Callable[[str], dict[str, str]] | None = None,
 ) -> str:
     """Single-column, inline-styled page that also works as an email body.
 
     public=True is the site variant: stories backed by paid sources keep title and link only.
+    votes (email only, never on the public page) maps a story's first source URL to its
+    signed 👍/👎 links.
     """
     day = italian_date(data.issue_date)
     return _env.get_template("bulletin.html").render(
@@ -72,6 +79,7 @@ def render_bulletin_html(
         kicker=f"Bollettino · {day}",
         site_url=site_url,
         public=public,
+        votes=None if public else votes,
     )
 
 
@@ -143,4 +151,19 @@ def render_index_html(bulletins: list[tuple[date, str]], weeklies: list[tuple[da
         weeklies=weekly_rows,
         page_title="feed-brain",
         kicker="Archivio",
+    )
+
+
+def render_vote_page(
+    *, state: str, message: str, headline: str = "", thumb: str = "", undo_url: str = ""
+) -> str:
+    """Page of the vote service: pending (its script casts the vote), recorded, undone, error."""
+    return _env.get_template("vote.html").render(
+        page_title="feed-brain · voto",
+        kicker="feed-brain · voto",
+        state=state,
+        message=message,
+        headline=headline,
+        thumb=thumb,
+        undo_url=undo_url,
     )

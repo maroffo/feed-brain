@@ -35,6 +35,8 @@ dependencies = [
     "tzdata>=2026.6",
     "google-cloud-storage>=3.17.1",
     "boto3>=1.43.123",
+    "starlette>=1.10.0",
+    "uvicorn>=0.54.0",
 ]
 
 [dependency-groups]

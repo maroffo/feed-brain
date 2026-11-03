@@ -12,14 +12,14 @@ Python 3.13 + uv, SQLAlchemy 2 async + asyncpg, Alembic, Postgres 15, Gemini Fla
 
 ```
 src/feed_brain/
-  __main__.py          # CLI: run, collect, bulletin, weekly, sync-vault, migrate, analyze, ...
+  __main__.py          # CLI: run, collect, bulletin, weekly, serve, sync-vault, migrate, analyze, ...
   config.py            # Pydantic Settings (env / .env)
   models.py            # Tier, Section (12), Category (vault), TriageResult, DeepAnalysis, BulletinData, WeeklyData
   interests.md         # interest profile injected into the triage prompt (edit freely)
   textutil.py          # clean_text: strip NUL/control chars before Postgres
   ai/gemini.py         # async structured output + retries (429/5xx, transport, bad JSON)
   ai/prompts.py        # clustering, bulletin and weekly prompts (Italian output)
-  db/models.py         # FeedSource, Article, Bulletin, WeeklyDigest
+  db/models.py         # FeedSource, Article, Bulletin, WeeklyDigest, StoryVote
   db/session.py        # asyncpg engine (pool 2, no overflow, pre-ping)
   db/migrate.py        # programmatic Alembic; migrations in db/migrations/versions
   services/
@@ -33,12 +33,15 @@ src/feed_brain/
     weekly.py          # due_week + generate_weekly
     render.py          # Jinja HTML (email-safe) + Markdown notes; safe_url/md filters
     storage.py         # LocalStorage / GcsStorage
-    delivery.py mailer.py outbox.py   # publish + index, SES email, vault outbox
+    delivery.py mailer.py outbox.py   # publish + index, SES email (with vote links), vault outbox
+    feedback.py        # pure: story_key, HMAC signature, VoteLinks, find_story
     vault_sync.py      # Mac side: outbox → vault (URL dedup), OPML push
     pipeline.py        # run_daily: isolated steps, failed steps → non-zero exit
     integrator.py      # vault entry building + append with URL dedup
-  templates/           # _base, _macros, bulletin, weekly, index (.html) + bulletin/weekly (.md)
-infra/                 # Terraform: job, scheduler, buckets, DB/user, IAM; inbox.tf (SES receiving, S3, AWS role)
+  web.py               # `serve`: Starlette vote service (GET page + JS POST, 403 on bad signature)
+  templates/           # _base, _macros, bulletin, weekly, index, vote (.html) + bulletin/weekly (.md)
+infra/                 # Terraform: job, scheduler, buckets, DB/user, IAM; inbox.tf (SES receiving, S3, AWS role);
+                       # feedback.tf (public vote service, its SA, link key secret)
 ops/launchd/           # sync-vault agent
 ```
 

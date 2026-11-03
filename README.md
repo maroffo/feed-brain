@@ -15,6 +15,9 @@ Cloud Scheduler 06:30 Europe/Rome
                     → write (Gemini) → store → publish page + email + vault outbox
        3. weekly    on Sunday (or catch-up Mon-Sat) from the week's bulletins
 
+Cloud Run service `feed-brain serve` (public, scales to zero)
+  └─ 👍/👎 links of the email → story_votes
+
 Mac (launchd, hourly)
   └─ `feed-brain sync-vault`: vault outbox (GCS) → Obsidian topic notes + Digests/, local OPML → GCS
 ```
@@ -25,6 +28,7 @@ Mac (launchd, hourly)
 - **Ranking**: `score = tier weight (high 2, medium 1) + source boost (2 feeds 0.5, 3 feeds 0.8, 4+ 1.0) + confidence`.
 - **Idempotency**: one bulletin per day (`--force` regenerates); each article is covered once; `published_at` / `sent_at` make job retries safe.
 - **Newsletter inbox**: paid newsletters forwarded from Gmail to any address on `in.behindbars.news` land in S3 (SES receiving, eu-west-1) and become articles during `collect`. Tracking links are decoded offline and reduced to the clean post URL (they carry personal tokens); only text is stored. Forwarded newsletters are always bulletin candidates. On the public page their stories show title and link only; email and vault keep everything.
+- **Story votes**: every story of the email (top stories and 'In breve') carries 👍/👎 links signed with HMAC (`issue_date`, a hash of the story's first source URL, the vote). The link opens a page of the `serve` service whose script casts the vote, so link scanners that open mail links without running JS record nothing; a `<noscript>` button covers browsers without JS. The last click wins, the page offers 'Annulla'. Votes on issues older than 30 days are refused. The public page and the vault note carry no buttons.
 - **Vault**: the bulletin and recap notes go to `Digests/`; the leads of the top stories (high tier, confidence ≥ 0.8) are appended to the Second Brain topic notes, once per URL.
 
 ## Stack
@@ -60,6 +64,7 @@ make test-e2e    # Alembic + asyncpg integration tests on the docker Postgres
 | `collect [--dry-run]` | Sync feeds from the GCS OPML (when `DATA_BUCKET` is set), fetch, read the newsletter inbox (when `INBOX_BUCKET` is set; `--dry-run` keeps the mails), triage |
 | `bulletin [--date] [--force] [--out]` | Generate (or reuse) the day's bulletin and render it locally |
 | `weekly [--week YYYY-Www] [--force] [--out]` | Generate the recap for a week (default: the week that is due) |
+| `serve` | Vote service behind the email's 👍/👎 links (Cloud Run service; listens on `$PORT`) |
 | `sync-vault [--outbox DIR] [--vault DIR] [--no-opml]` | Mac side of the vault bridge |
 | `migrate` | Apply Alembic migrations |
 | `analyze --article-id N` | Opus deep analysis of one article |
@@ -85,6 +90,8 @@ All settings come from environment variables (`.env` locally, job spec and Secre
 | `INBOX_BUCKET`, `INBOX_REGION` | unset, `eu-west-1` | Newsletter inbox bucket (no bucket = no inbox) |
 | `INBOX_ROLE_ARN`, `INBOX_AUDIENCE` | unset, `feed-brain-inbox` | Cloud Run: AWS role assumed with the job's Google identity. Unset locally: the default AWS chain (`AWS_PROFILE`) |
 | `INBOX_MAX_PER_RUN` | 50 | Mails read per run |
+| `FEEDBACK_URL`, `FEEDBACK_KEY` | unset | Vote service base URL and the HMAC key that signs (job) and checks (service) the links; both unset = no buttons |
+| `FEEDBACK_MAX_AGE_DAYS` | 30 | Votes on older issues are refused |
 
 ## Deployment runbook (GCP)
 
@@ -104,7 +111,7 @@ The stack lives in `infra/` with its own Terraform state. Shared BehindBarsPulse
    docker buildx build --platform linux/amd64 \
      -t europe-west1-docker.pkg.dev/playground-maroffo/feed-brain/feed-brain:$(git rev-parse --short HEAD) --push ..
    ```
-4. **Everything else**: `terraform apply` (job, scheduler, buckets, DB + user, service accounts, IAM).
+4. **Everything else**: `terraform apply` (job, scheduler, buckets, DB + user, service accounts, IAM, the public vote service `feed-brain-feedback` and its link key; the job gets `FEEDBACK_URL` from it).
 5. **Migrate and first run**:
    ```bash
    gcloud run jobs execute feed-brain --region europe-west1 --args=migrate --wait
@@ -129,7 +136,7 @@ The stack lives in `infra/` with its own Terraform state. Shared BehindBarsPulse
    ```
    Edit `~/Documents/Feeds.opml` as usual: the next sync uploads it and the next run picks it up.
 
-New releases: build and push a new tag, update `image`, `terraform apply`. `run` applies pending migrations itself.
+New releases: build and push a new tag, update `image`, `terraform apply`. `run` applies pending migrations itself; when a release adds one the vote service needs before the next morning, run `--args=migrate` right after the apply.
 
 ## License
 

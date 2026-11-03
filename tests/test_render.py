@@ -398,3 +398,24 @@ def test_a_single_folded_story_is_named_in_the_singular():
     assert "e un'altra storia" in md and "e un&#39;altra storia" in html
     assert "altre 1 storie" not in md + html
     assert "e altre 4 storie" in render_bulletin_md(_two_brief_issue(omitted=4))
+
+
+def _votes():
+    from feed_brain.services.feedback import VoteLinks
+
+    return VoteLinks("https://fb.run.app", b"k" * 32, DATA.issue_date)
+
+
+def test_email_carries_thumbs_on_top_stories_and_briefs():
+    votes = _votes()
+    html = render_bulletin_html(DATA, votes=votes)
+    for url in ("https://krebs/a", "https://onrugby/x"):
+        links = votes(url)
+        assert f'href="{links["up"]}"' in html and f'href="{links["down"]}"' in html
+    assert html.count("👍") == 2 and html.count("👎") == 2
+
+
+def test_no_thumbs_without_vote_links_on_the_public_page_or_in_the_vault_note():
+    assert "👍" not in render_bulletin_html(DATA)
+    assert "👍" not in render_bulletin_html(DATA, votes=_votes(), public=True)
+    assert "👍" not in render_bulletin_md(DATA)

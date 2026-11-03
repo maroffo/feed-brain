@@ -1,9 +1,10 @@
 # ABOUTME: CLI entry point for feed-brain with full pipeline commands.
-# ABOUTME: Commands: migrate, collect, bulletin, weekly, run, sync-vault, fetch, triage, analyze, integrate, list, reset, import-opml.
+# ABOUTME: Commands: migrate, collect, bulletin, weekly, run, serve, sync-vault, fetch, triage, analyze, integrate, list, reset, import-opml.
 
 import argparse
 import asyncio
 import logging
+import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -55,6 +56,18 @@ def cmd_migrate(_args: argparse.Namespace) -> None:
     from feed_brain.db.migrate import upgrade_head
 
     upgrade_head()
+
+
+def cmd_serve(_args: argparse.Namespace) -> None:
+    """Run the public vote service behind the email's 👍/👎 links (Cloud Run sets PORT)."""
+    import uvicorn
+
+    from feed_brain.config import get_settings
+    from feed_brain.web import create_app
+
+    port = int(os.environ.get("PORT", "8080"))
+    # No access log: every request path carries a link signature.
+    uvicorn.run(create_app(get_settings()), host="0.0.0.0", port=port, access_log=False)  # noqa: S104
 
 
 def cmd_fetch(_args: argparse.Namespace) -> None:
@@ -407,6 +420,9 @@ def main() -> None:
     # migrate
     subparsers.add_parser("migrate", help="Apply pending database migrations")
 
+    # serve
+    subparsers.add_parser("serve", help="Run the vote service behind the email's 👍/👎 links")
+
     # fetch
     subparsers.add_parser("fetch", help="Fetch new articles from all feeds")
 
@@ -494,6 +510,7 @@ def main() -> None:
         "bulletin": cmd_bulletin,
         "weekly": cmd_weekly,
         "run": cmd_run,
+        "serve": cmd_serve,
         "sync-vault": cmd_sync_vault,
         "list": cmd_list,
         "reset": cmd_reset,
