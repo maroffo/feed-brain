@@ -126,23 +126,37 @@ def assemble(
     by_section: dict[str, list[Story]] = defaultdict(list)
     for story in rest:
         by_section[story.section].append(story)
-    sections = [
-        SectionBlock(
-            key=section,
-            title=SECTION_TITLES[section],
-            items=[
-                BriefItem(
-                    headline=s.headline,
-                    summary=first_sentence(s.lead.summary),
-                    sources=_sources(s),
-                )
-                for s in by_section[section.value][:section_cap]
-            ],
-            omitted=max(0, len(by_section[section.value]) - section_cap),
+
+    def shown(stories: list[Story]) -> list[Story]:
+        """The first section_cap stories, plus every one built on a forwarded newsletter
+        (picked by hand, so never folded into "e altre N storie")."""
+        return [
+            s
+            for rank, s in enumerate(stories)
+            if rank < section_cap or any(c.paid for c in s.articles)
+        ]
+
+    sections = []
+    for section in Section:
+        stories = by_section.get(section.value)
+        if section == Section.THREAT_RADAR or not stories:
+            continue
+        listed = shown(stories)
+        sections.append(
+            SectionBlock(
+                key=section,
+                title=SECTION_TITLES[section],
+                items=[
+                    BriefItem(
+                        headline=s.headline,
+                        summary=first_sentence(s.lead.summary),
+                        sources=_sources(s),
+                    )
+                    for s in listed
+                ],
+                omitted=len(stories) - len(listed),
+            )
         )
-        for section in Section
-        if section != Section.THREAT_RADAR and by_section.get(section.value)
-    ]
 
     return BulletinData(
         issue_date=issue_date,

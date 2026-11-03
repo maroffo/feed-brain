@@ -46,7 +46,8 @@
 <div class="item">
 {{ m.link(item.sources[0].url, item.headline, "h") }}
 {% if item.summary and not reserved %}<span class="muted"> {{ item.summary }}</span>{% endif %}
-{{ m.sources(item.sources) }}
+{#- The headline already links a single source: name the outlet only (email size). -#}
+{% if item.sources | length > 1 %}{{ m.sources(item.sources) }}{% else %}<span class="more"> · {{ item.sources[0].name }}</span>{% endif %}
 </div>
 {% endfor %}
 {% if block.omitted %}<div class="more">e altre {{ block.omitted }} storie</div>{% endif %}
