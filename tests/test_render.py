@@ -335,3 +335,38 @@ def test_issues_stored_with_a_prose_editorial_still_render_it():
     assert "<p>Primo paragrafo.</p>" in html and "<p>Secondo paragrafo.</p>" in html
     assert "Una giornata" in html
     assert "Primo paragrafo." in render_bulletin_md(legacy)
+
+
+LEGACY_JSON = """{
+  "issue_date": "2026-11-02",
+  "title": "Bollettino del 2 novembre",
+  "subtitle": "Una frase sul filo della giornata.",
+  "editorial": "Primo paragrafo.\\n\\nSecondo paragrafo.",
+  "top_stories": [{
+    "title": "Storia", "text": "Testo.", "section": "security",
+    "sources": [{"name": "Krebs", "title": "T", "url": "https://k/1", "paid": false}],
+    "analysis": {"summary": "Sintesi.", "insights": ["i1", "i2", "i3", "i4"],
+                 "money_quote": "Quote.", "actionables": ["a1"]},
+    "lead_url": "https://k/1"
+  }],
+  "sections": [{"key": "management", "title": "Management e agile", "omitted": 0,
+                "items": [{"headline": "Scrum", "summary": "S.",
+                           "sources": [{"name": "Blog", "title": "B", "url": "https://b/1"}]}]}],
+  "radar": [{"title": "CVE-1", "url": "https://cve/1", "source": "cvefeed"}],
+  "articles_count": 50
+}"""
+
+
+def test_issues_stored_before_the_key_points_still_parse_and_render():
+    """Stored JSON of the first issues: subtitle, prose editorial, radar, a management block."""
+    data = BulletinData.model_validate_json(LEGACY_JSON)
+    assert (data.key_points, data.subtitle) == ([], "Una frase sul filo della giornata.")
+    html = render_bulletin_html(data)
+    assert "<p>Secondo paragrafo.</p>" in html and "Management e agile" in html
+    assert "Quote." in html and "CVE-1" not in html
+    assert "Secondo paragrafo." in render_bulletin_md(data)
+
+
+def test_money_quote_is_styled_outside_the_notes_box():
+    css = render_bulletin_html(DATA).split("</style>", 1)[0]
+    assert ".story blockquote{" in css
