@@ -9,9 +9,9 @@ Cloud Scheduler 06:30 Europe/Rome
   └─ Cloud Run Job `feed-brain run`
        1. collect   OPML (GCS) → fetch + extract; newsletter inbox (SES → S3) → articles
                     → triage (Gemini Flash: tier, section, vault category)
-       2. bulletin  candidates (last 36h, high/medium + threat radar)
+       2. bulletin  candidates (last 36h, high/medium, daily sections only)
                     → cluster per section (Gemini) → rank (tier + multi-source boost + confidence)
-                    → deep analysis of the top 10 leads (Claude Opus 5.5, optional)
+                    → deep analysis of the first 3 of 5 top leads (Claude Opus 5.5, optional)
                     → write (Gemini) → store → publish page + email + vault outbox
        3. weekly    on Sunday (or catch-up Mon-Sat) from the week's bulletins
 
@@ -19,7 +19,8 @@ Mac (launchd, hourly)
   └─ `feed-brain sync-vault`: vault outbox (GCS) → Obsidian topic notes + Digests/, local OPML → GCS
 ```
 
-- **Sections**: 12, derived from the OPML folders (security, threat radar, AI, tech, cloud/DevOps, software, management, research, politics, economy, culture, sport). Triage assigns them per article, using feed name and folder as a hint.
+- **Sections**: 12, derived from the OPML folders (security, threat radar, AI, tech, cloud/DevOps, software, management, research, politics, economy, culture, sport). Triage assigns them per article, using feed name and folder as a hint. The daily issue reads politics/economy first, then culture/sport, then the technical sections; threat radar, research and management (agile/PM) stay out of it, unstamped, for dedicated bulletins.
+- **Issue shape**: 'Il punto' as 3-5 key points, 5 top stories, 3 'In breve' items per section (forwarded newsletters always shown). Analyzed stories show the source's money quote; insights and to-dos only when the analysis finds something actionable for the reader. Writing is telegraphic: no moral closer, no outlet names in the prose.
 - **Interest profile**: `src/feed_brain/interests.md`, plain Markdown injected into the triage prompt. Edit it to change what counts as high, medium or low.
 - **Ranking**: `score = tier weight (high 2, medium 1) + source boost (2 feeds 0.5, 3 feeds 0.8, 4+ 1.0) + confidence`.
 - **Idempotency**: one bulletin per day (`--force` regenerates); each article is covered once; `published_at` / `sent_at` make job retries safe.
@@ -77,7 +78,8 @@ All settings come from environment variables (`.env` locally, job spec and Secre
 | `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` | local docker | Postgres |
 | `SITE_BUCKET`, `DATA_BUCKET`, `SITE_URL` | unset | Public site, private outbox/OPML bucket, public base URL |
 | `SES_USR`, `SES_PWD`, `SENDER_EMAIL`, `DIGEST_RECIPIENT` | unset | Email via SES SMTP |
-| `TOP_STORIES`, `SECTION_CAP`, `RADAR_CAP`, `CANDIDATE_WINDOW_HOURS` | 10, 6, 15, 36 | Bulletin shape |
+| `TOP_STORIES`, `SECTION_CAP`, `CANDIDATE_WINDOW_HOURS` | 5, 3, 36 | Bulletin shape |
+| `ANALYSIS_TOP_N`, `ANALYSIS_MIN_CHARS` | 3, 1500 | Opus runs on the first N leads with at least that much content |
 | `VAULT_PATH`, `LOCAL_OPML_PATH` | iCloud vault, `~/Documents/Feeds.opml` | Mac sync only |
 | `FETCH_PROXY` | unset | Proxy for sites that block cloud IPs (403/419/429 and network errors get one retry through it), e.g. `socks5://user:pass@host:1080` |
 | `INBOX_BUCKET`, `INBOX_REGION` | unset, `eu-west-1` | Newsletter inbox bucket (no bucket = no inbox) |

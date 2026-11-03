@@ -27,7 +27,7 @@ src/feed_brain/
     inbox.py           # newsletter inbox: S3 mails → articles (offline link decoding, no tokens kept)
     triage.py          # Gemini triage on snapshots, concurrent, per-article commits
     clustering.py      # one Gemini call per section, normalize_clusters
-    ranking.py         # pure: score, lead, top stories, radar
+    ranking.py         # pure: score, lead, top stories
     analyzer.py        # Opus 5.5 (effort high, fallbacks="default"), Minions for arXiv
     bulletin.py        # generate_bulletin: idempotent per day, atomic --force
     weekly.py          # due_week + generate_weekly
