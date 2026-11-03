@@ -9,13 +9,13 @@
 - Software architecture and distributed systems: patterns, scalability case studies, Go concurrency and performance
 - Engineering management: productivity frameworks (SPACE, DORA), technical debt strategies, org design
 - DevOps and cloud architecture: Kubernetes, Terraform, observability, significant GCP/AWS platform changes
+- Italian and European politics, geopolitics, trade policy; justice system and prison reform
+- Economics with data or original analysis: Italian public finance, labor, EU economy
 
 **Medium interest (tier: medium)**
 - Tech industry news with substance: regulation, antitrust, major outages, platform shifts
 - Python tooling, CLI tools, terminal workflows; Docker, containers, security hardening
 - Engineering leadership, hiring, team practices
-- Italian and European politics, geopolitics, trade policy; justice system and prison reform
-- Economics with data or original analysis: Italian public finance, labor, EU economy
 - Research papers in software engineering and AI with practical, reproducible results
 - Long-form culture and essays, personal blogs with original thought, science skepticism
 - Leisure the reader chose: long-form sport analysis (rugby, cycling, basketball, football tactics), jazz album reviews, comics
