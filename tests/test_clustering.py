@@ -54,19 +54,17 @@ class FakeGemini:
         return ClusterResponse(stories=[ClusterOut(article_ids=ids, headline="Tutto insieme")])
 
 
-async def test_cluster_candidates_one_call_per_section_skipping_radar():
+async def test_cluster_candidates_one_call_per_section():
     candidates = [
         _c(1, "tech"),
         _c(2, "tech", source="B"),
         _c(3, "security"),
-        _c(4, "threat_radar"),
     ]
     gemini = FakeGemini()
 
     stories = await cluster_candidates(candidates, gemini, concurrency=2)
 
     assert len(gemini.prompts) == 2
-    assert not any("[4]" in p for p in gemini.prompts)
     by_section = {s.section: [c.article_id for c in s.articles] for s in stories}
     assert by_section == {"tech": [1, 2], "security": [3]}
     tech_prompt = next(p for p in gemini.prompts if "Section: tech" in p)

@@ -1,4 +1,4 @@
-{#- ABOUTME: Daily bulletin page/email: Il punto, top stories with Approfondimento, In breve per section, threat radar. -#}
+{#- ABOUTME: Daily bulletin page/email: Il punto, top stories with quote and notes, In breve per section. -#}
 {#- ABOUTME: Rendered from BulletinData only; `public` (site) keeps paid-source stories to title and link. -#}
 {% extends "_base.html" %}
 {% import "_macros.html" as m %}
@@ -6,7 +6,10 @@
 <h1>{{ data.title }}</h1>
 {% if data.subtitle %}<div class="sub">{{ data.subtitle }}</div>{% endif %}
 
-{% if data.editorial %}
+{% if data.key_points %}
+<h2>Il punto</h2>
+<ul>{% for p in data.key_points %}<li>{{ p }}</li>{% endfor %}</ul>
+{% elif data.editorial %}
 <h2>Il punto</h2>
 {% for p in data.editorial | paragraphs %}<p>{{ p }}</p>
 {% endfor %}
@@ -24,13 +27,11 @@
 {{ m.sources(story.sources) }}
 {% else %}
 <p>{{ story.text }}</p>
+{% if story.analysis and story.analysis.money_quote %}<blockquote>“{{ story.analysis.money_quote }}”</blockquote>{% endif %}
 {{ m.sources(story.sources) }}
-{% if story.analysis %}
+{% if story.analysis and (story.analysis.insights or story.analysis.actionables) %}
 <div class="deep">
-<b>Approfondimento</b>
-<p>{{ story.analysis.summary }}</p>
-{% if story.analysis.insights %}<ul>{% for i in story.analysis.insights %}<li>{{ i }}</li>{% endfor %}</ul>{% endif %}
-{% if story.analysis.money_quote %}<blockquote>“{{ story.analysis.money_quote }}”</blockquote>{% endif %}
+{% if story.analysis.insights %}<b>Approfondimento</b><ul>{% for i in story.analysis.insights %}<li>{{ i }}</li>{% endfor %}</ul>{% endif %}
 {% if story.analysis.actionables %}<b>Da fare</b><ul>{% for a in story.analysis.actionables %}<li>{{ a }}</li>{% endfor %}</ul>{% endif %}
 </div>
 {% endif %}
@@ -53,12 +54,6 @@
 {% if block.omitted %}<div class="more">e altre {{ block.omitted }} storie</div>{% endif %}
 {% endfor %}
 
-{% if data.radar %}
-<h2 class="s">Radar minacce</h2>
-<ul class="radar">
-{% for r in data.radar %}<li>{{ m.link(r.url, r.title) }} <span class="more">({{ r.source }})</span></li>
-{% endfor %}</ul>
-{% endif %}
 {% endblock %}
 {% block footer %}
 {{ data.articles_count }} articoli considerati · generato da feed-brain{% if site_url %} · <a href="{{ site_url | safe_url }}">archivio</a>{% endif %}

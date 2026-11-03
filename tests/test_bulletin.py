@@ -22,6 +22,13 @@ from feed_brain.services.ranking import Candidate, Story
 
 ISSUE = date(2026, 11, 2)
 ANALYSIS = DeepAnalysis(summary="Analisi.", insights=["i1"], money_quote="Q", actionables=[])
+ACTIONABLE = DeepAnalysis(
+    summary="Analisi.",
+    insights=["i1", "i2", "i3"],
+    money_quote="Q",
+    actionables=["a1", "a2", "a3"],
+)
+LONG_TEXT = "Testo dell'articolo. " * 100  # above analysis_min_chars
 
 
 def _cand(article_id, section="security", tier="high", source="Krebs", confidence=0.9):
@@ -51,34 +58,33 @@ def test_assemble_uses_writer_text_with_fallback_and_orders_sections():
         Story("ai", [_cand(3, section="ai")], "Agenti"),
     ]
     rest = [
-        Story("sport", [_cand(4, section="sport", tier="medium")], "Rugby"),
         Story("tech", [_cand(5, section="tech", tier="medium")], "Chip"),
+        Story("sport", [_cand(4, section="sport", tier="medium")], "Rugby"),
     ]
-    radar = [_cand(6, section="threat_radar", tier="low")]
     draft = BulletinDraft(
         title="T",
-        subtitle="S",
-        editorial="E",
+        key_points=["Primo fatto.", " ", "\x00", "Secondo fatto."],
         top_stories=[WrittenStory(index=0, title="Breccia grave", text="Testo.")],
     )
 
-    data = assemble(ISSUE, draft, top, rest, radar, {1: ANALYSIS}, articles_count=6)
+    data = assemble(ISSUE, draft, top, rest, {1: ANALYSIS}, articles_count=6)
 
-    assert (data.title, data.subtitle, data.editorial) == ("T", "S", "E")
+    assert (data.title, data.subtitle, data.editorial) == ("T", "", "")
+    assert data.key_points == ["Primo fatto.", "Secondo fatto."]
     assert data.top_stories[0].title == "Breccia grave"
     assert [s.name for s in data.top_stories[0].sources] == ["Krebs", "Schneier"]
-    assert data.top_stories[0].analysis == ANALYSIS
+    assert data.top_stories[0].analysis.money_quote == "Q"
     # index 1 missing from draft: headline + lead summary
     assert data.top_stories[1].title == "Agenti"
     assert data.top_stories[1].text == "Prima frase 3. Seconda frase."
     assert data.top_stories[1].analysis is None
-    assert [b.key for b in data.sections] == [Section.TECH, Section.SPORT]
-    assert data.sections[0].items[0].summary == "Prima frase 5."
-    assert data.radar[0].title == "Title 6"
+    # culture and sport come before the technical sections
+    assert [b.key for b in data.sections] == [Section.SPORT, Section.TECH]
+    assert data.sections[1].items[0].summary == "Prima frase 5."
 
 
 def test_assemble_without_draft_degrades_gracefully():
-    data = assemble(ISSUE, None, [Story("ai", [_cand(1, section="ai")], "H")], [], [], {}, 1)
+    data = assemble(ISSUE, None, [Story("ai", [_cand(1, section="ai")], "H")], [], {}, 1)
     assert data.title == "Il bollettino del 2 novembre 2026"
     assert data.top_stories[0].title == "H"
 
@@ -113,9 +119,7 @@ class FakeGemini:
             from feed_brain.ai.gemini import GeminiError
 
             raise GeminiError("down")
-        return BulletinDraft(
-            title="Titolo", subtitle="Sotto", editorial="Il punto.", top_stories=self.written
-        )
+        return BulletinDraft(title="Titolo", key_points=["Il punto."], top_stories=self.written)
 
 
 @pytest.fixture
@@ -143,7 +147,7 @@ async def _seed(session_factory) -> dict[str, int]:
                 "url": f"https://x/{title}",
                 "title": title,
                 "source_id": source.id,
-                "content": "body",
+                "content": LONG_TEXT,
                 "status": "triaged",
                 "tier": "high",
                 "section": "security",
@@ -160,6 +164,8 @@ async def _seed(session_factory) -> dict[str, int]:
             art("politics", post, tier="medium", section="politics", confidence=0.6),
             art("low-tech", post, tier="low", section="tech"),
             art("radar-low", krebs, tier="low", section="threat_radar"),
+            art("paper", krebs, tier="high", section="research"),
+            art("agile", post, tier="high", section="management"),
             art("old", krebs, fetched_at=now - timedelta(hours=72)),
             art("untriaged", krebs, status="new", tier=None, section=None),
         ]
@@ -177,8 +183,9 @@ async def test_generate_bulletin_persists_stamps_and_is_idempotent(session_facto
     assert bulletin is not None
     data = BulletinData.model_validate_json(bulletin.content_json)
     assert data.title == "Titolo"
-    assert data.articles_count == 4
-    assert [r.title for r in data.radar] == ["radar-low"]
+    assert data.key_points == ["Il punto."]
+    assert bulletin.editorial == "Il punto."
+    assert data.articles_count == 3
     assert {s.title for s in data.top_stories} == {"Storia"}
     async with session_factory() as session:
         stamped = {
@@ -188,8 +195,9 @@ async def test_generate_bulletin_persists_stamps_and_is_idempotent(session_facto
         "breach-a",
         "breach-b",
         "politics",
-        "radar-low",
     }
+    # threat radar, research and management stay out of the daily issue, unstamped
+    assert {stamped[t] for t in ("radar-low", "paper", "agile")} == {None}
     assert analyzed  # leads of top stories analyzed
     async with session_factory() as session:
         lead = await session.get(Article, analyzed[0])
@@ -221,7 +229,7 @@ async def test_force_regenerates_and_restamps(session_factory, analyzed):
         stamped = {a.bulletin_id for a in (await session.execute(select(Article))).scalars()}
     assert [b.id for b in bulletins] == [second.id]
     assert stamped == {None, second.id}
-    assert BulletinData.model_validate_json(second.content_json).articles_count == 4
+    assert BulletinData.model_validate_json(second.content_json).articles_count == 3
 
 
 async def test_no_anthropic_client_skips_analysis(session_factory, analyzed):
@@ -257,7 +265,7 @@ def test_short_source_name():
 
 def test_assemble_caps_briefs_per_section_and_counts_the_rest():
     rest = [Story("tech", [_cand(i, section="tech", tier="medium")], f"H{i}") for i in range(1, 6)]
-    data = assemble(ISSUE, None, [], rest, [], {}, 5, section_cap=3)
+    data = assemble(ISSUE, None, [], rest, {}, 5, section_cap=3)
     assert [i.headline for i in data.sections[0].items] == ["H1", "H2", "H3"]
     assert data.sections[0].omitted == 2
 
@@ -265,11 +273,10 @@ def test_assemble_caps_briefs_per_section_and_counts_the_rest():
 def test_assemble_whitespace_titles_fall_back():
     draft = BulletinDraft(
         title="  \x00 ",
-        subtitle="",
-        editorial="",
+        key_points=[],
         top_stories=[WrittenStory(index=0, title="\x01", text=" ")],
     )
-    data = assemble(ISSUE, draft, [Story("ai", [_cand(1, section="ai")], "H")], [], [], {}, 1)
+    data = assemble(ISSUE, draft, [Story("ai", [_cand(1, section="ai")], "H")], [], {}, 1)
     assert data.title == "Il bollettino del 2 novembre 2026"
     assert data.top_stories[0].title == "H"
     assert data.top_stories[0].text == "Prima frase 1. Seconda frase."
@@ -281,43 +288,12 @@ async def test_writer_stories_and_analysis_reach_the_issue(session_factory):
     gemini = FakeGemini(written=[WrittenStory(index=0, title="Scritto", text="Dal writer.")])
     bulletin = await generate_bulletin(ISSUE, gemini=gemini, anthropic=object())
     data = BulletinData.model_validate_json(bulletin.content_json)
-    assert data.top_stories[0].title == "Scritto"
-    assert data.top_stories[0].lead_url.startswith("https://x/")
-    assert "Analisi: Analisi." in gemini.writer_prompt and "* i1" in gemini.writer_prompt
-
-
-@pytest.mark.usefixtures("analyzed")
-async def test_radar_overflow_is_stamped(session_factory):
-    from feed_brain.config import Settings
-
-    await _seed(session_factory)
-    async with session_factory() as session:
-        session.add(
-            Article(
-                url="https://x/radar-2",
-                title="radar-2",
-                content="b",
-                status="triaged",
-                tier="low",
-                section="threat_radar",
-                confidence=0.1,
-                summary="s",
-                fetched_at=datetime.now(UTC),
-            )
-        )
-        await session.commit()
-    settings = Settings(_env_file=None, radar_cap=1)
-    bulletin = await generate_bulletin(
-        ISSUE, gemini=FakeGemini(), anthropic=None, settings=settings
-    )
-    assert len(BulletinData.model_validate_json(bulletin.content_json).radar) == 1
-    async with session_factory() as session:
-        radar = (
-            (await session.execute(select(Article).where(Article.section == "threat_radar")))
-            .scalars()
-            .all()
-        )
-    assert {a.bulletin_id for a in radar} == {bulletin.id}
+    # index 0 is the top-ranked (security) story, shown after the politics one
+    written = next(s for s in data.top_stories if s.section == Section.SECURITY)
+    assert written.title == "Scritto"
+    assert written.lead_url.startswith("https://x/")
+    # the writer gets the analysis summary; insights are the issue's own notes
+    assert "Analisi: Analisi." in gemini.writer_prompt and "i1" not in gemini.writer_prompt
 
 
 @pytest.mark.usefixtures("analyzed")
@@ -333,7 +309,7 @@ async def test_force_reuses_aged_out_articles_of_the_old_issue(session_factory):
     second = await generate_bulletin(ISSUE, force=True, gemini=FakeGemini(), anthropic=None)
 
     assert second is not None
-    assert BulletinData.model_validate_json(second.content_json).articles_count == 4
+    assert BulletinData.model_validate_json(second.content_json).articles_count == 3
 
 
 @pytest.mark.usefixtures("analyzed")
@@ -460,8 +436,96 @@ def test_stories_built_on_forwarded_newsletters_skip_the_section_cap():
     paid = _cand(9, section="tech", tier="low")
     rest.append(Story("tech", [dataclasses.replace(paid, paid=True)], "Newsletter"))
 
-    data = assemble(ISSUE, None, [], rest, [], {}, 5, section_cap=2)
+    data = assemble(ISSUE, None, [], rest, {}, 5, section_cap=2)
 
     assert [i.headline for i in data.sections[0].items] == ["H1", "H2", "Newsletter"]
     assert data.sections[0].omitted == 2
     assert data.sections[0].items[-1].sources[0].paid is True
+
+
+def test_top_stories_are_grouped_by_area_keeping_importance_inside_each():
+    """Chosen by importance, read politics/economy first, then culture/sport, then tech."""
+    top = [
+        Story("security", [_cand(1)], "Sicurezza"),
+        Story("culture", [_cand(2, section="culture")], "Cultura"),
+        Story("economy", [_cand(3, section="economy")], "Economia"),
+        Story("ai", [_cand(4, section="ai")], "AI"),
+        Story("politics", [_cand(5, section="politics")], "Politica"),
+    ]
+    draft = BulletinDraft(
+        title="T", key_points=[], top_stories=[WrittenStory(index=4, title="Voto", text="Testo.")]
+    )
+
+    data = assemble(ISSUE, draft, top, [], {}, 5)
+
+    assert [s.title for s in data.top_stories] == ["Economia", "Voto", "Cultura", "Sicurezza", "AI"]
+
+
+def test_issue_shows_the_quote_always_and_notes_only_for_actionable_stories():
+    top = [
+        Story("security", [_cand(1)], "Da fare"),
+        Story("politics", [_cand(2, section="politics")], "Notizia"),
+    ]
+    news = DeepAnalysis(summary="S.", insights=["n1", "n2"], money_quote="Q2", actionables=[])
+
+    data = assemble(ISSUE, None, top, [], {1: ACTIONABLE, 2: news}, 2)
+
+    shown = {s.title: s.analysis for s in data.top_stories}
+    assert shown["Da fare"].insights == ["i1", "i2"]
+    assert shown["Da fare"].actionables == ["a1", "a2"]
+    assert shown["Da fare"].money_quote == "Q"
+    assert shown["Notizia"].insights == []
+    assert shown["Notizia"].money_quote == "Q2"
+
+
+def test_sections_outside_the_daily_issue_are_left_out():
+    rest = [
+        Story(section, [_cand(i, section=section, tier="medium")], section)
+        for i, section in enumerate(["research", "management", "threat_radar", "politics"], 1)
+    ]
+    data = assemble(ISSUE, None, [], rest, {}, 4)
+    assert [b.key for b in data.sections] == [Section.POLITICS]
+
+
+async def test_opus_runs_only_on_the_first_leads_with_enough_text(session_factory, analyzed):
+    """Opus covers the first analysis_top_n stories, skipping leads with too little text
+    (a title-only feed item would get an analysis of nothing)."""
+    from feed_brain.config import Settings
+
+    now = datetime.now(UTC)
+    async with session_factory() as session:
+        source = FeedSource(name="Il Post", url="https://post/feed")
+        session.add(source)
+        await session.flush()
+        rows = [
+            ("first", "security", 0.9, LONG_TEXT),
+            ("thin", "politics", 0.8, "Solo il titolo."),
+            ("third", "economy", 0.7, LONG_TEXT),
+        ]
+        articles = [
+            Article(
+                url=f"https://x/{title}",
+                title=title,
+                source_id=source.id,
+                content=content,
+                status="triaged",
+                tier="high",
+                section=section,
+                confidence=confidence,
+                summary=f"{title}.",
+                fetched_at=now,
+            )
+            for title, section, confidence, content in rows
+        ]
+        session.add_all(articles)
+        await session.commit()
+        ids = {a.title: a.id for a in articles}
+    settings = Settings(_env_file=None, analysis_top_n=2, analysis_min_chars=100)
+
+    bulletin = await generate_bulletin(
+        ISSUE, gemini=FakeGemini(), anthropic=object(), settings=settings
+    )
+
+    assert analyzed == [ids["first"]]
+    data = BulletinData.model_validate_json(bulletin.content_json)
+    assert [s.analysis is not None for s in data.top_stories] == [False, False, True]

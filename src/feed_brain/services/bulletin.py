@@ -21,13 +21,14 @@ from feed_brain.config import Settings, get_settings
 from feed_brain.db.models import EMAIL_FEED_TYPE, Article, Bulletin, FeedSource
 from feed_brain.db.session import get_session_factory
 from feed_brain.models import (
+    DAILY_AREAS,
+    DAILY_SECTIONS,
     SECTION_TITLES,
     ArticleStatus,
     BriefItem,
     BulletinData,
     BulletinDraft,
     DeepAnalysis,
-    RadarItem,
     Section,
     SectionBlock,
     SourceRef,
@@ -36,10 +37,12 @@ from feed_brain.models import (
 )
 from feed_brain.services.analyzer import deep_analyze
 from feed_brain.services.clustering import cluster_candidates
-from feed_brain.services.ranking import THREAT_RADAR, Candidate, Story, radar_items, select_top
+from feed_brain.services.ranking import Candidate, Story, select_top
 from feed_brain.textutil import clean_text
 
 log = structlog.get_logger()
+
+SHOWN_NOTES = 2  # insights and to-dos shown per analyzed story; the article row keeps them all
 
 _MONTHS = [
     "gennaio",
@@ -97,20 +100,39 @@ def _sources(story: Story) -> list[SourceRef]:
     return [SourceRef(name=c.source, title=c.title, url=c.url, paid=c.paid) for c in story.articles]
 
 
+def _area(section: str) -> int:
+    """Reading position of a section's area; sections outside the daily issue go last."""
+    return next((i for i, area in enumerate(DAILY_AREAS) if section in area), len(DAILY_AREAS))
+
+
+def shown_analysis(analysis: DeepAnalysis | None) -> DeepAnalysis | None:
+    """What the issue shows of an analysis: the quote always; insights and to-dos only when
+    the story is actionable for the reader (the analysis has to-dos), SHOWN_NOTES each."""
+    if analysis is None:
+        return None
+    actionables = analysis.actionables[:SHOWN_NOTES]
+    insights = analysis.insights[:SHOWN_NOTES] if actionables else []
+    return analysis.model_copy(update={"insights": insights, "actionables": actionables})
+
+
 def assemble(
     issue_date: date,
     draft: BulletinDraft | None,
     top: list[Story],
     rest: list[Story],
-    radar: list[Candidate],
     analyses: dict[int, DeepAnalysis],
     articles_count: int,
-    section_cap: int = 6,
+    section_cap: int = 3,
 ) -> BulletinData:
-    """Pure assembly of the issue; writer gaps fall back to cluster headline + lead summary."""
+    """Pure assembly of the issue; writer gaps fall back to cluster headline + lead summary.
+
+    Top stories arrive by importance and are shown grouped by area (DAILY_AREAS), keeping
+    the importance order inside each area; 'In breve' follows DAILY_SECTIONS.
+    """
     written = {w.index: w for w in draft.top_stories} if draft else {}
     top_stories = []
-    for index, story in enumerate(top):
+    # sorted() is stable: inside an area the stories keep their rank.
+    for index, story in sorted(enumerate(top), key=lambda pair: _area(pair[1].section)):
         w = written.get(index)
         top_stories.append(
             TopStory(
@@ -118,7 +140,7 @@ def assemble(
                 text=(clean_text(w.text).strip() if w else "") or story.lead.summary,
                 section=Section(story.section),
                 sources=_sources(story),
-                analysis=analyses.get(story.lead.article_id),
+                analysis=shown_analysis(analyses.get(story.lead.article_id)),
                 lead_url=story.lead.url,
             )
         )
@@ -137,9 +159,9 @@ def assemble(
         ]
 
     sections = []
-    for section in Section:
+    for section in DAILY_SECTIONS:
         stories = by_section.get(section.value)
-        if section == Section.THREAT_RADAR or not stories:
+        if not stories:
             continue
         listed = shown(stories)
         sections.append(
@@ -158,15 +180,14 @@ def assemble(
             )
         )
 
+    key_points = [clean_text(p).strip() for p in draft.key_points] if draft else []
     return BulletinData(
         issue_date=issue_date,
         title=(clean_text(draft.title).strip() if draft else "")
         or f"Il bollettino del {italian_date(issue_date)}",
-        subtitle=clean_text(draft.subtitle) if draft else "",
-        editorial=clean_text(draft.editorial) if draft else "",
+        key_points=[p for p in key_points if p],
         top_stories=top_stories,
         sections=sections,
-        radar=[RadarItem(title=c.title, url=c.url, source=c.source) for c in radar],
         articles_count=articles_count,
     )
 
@@ -174,7 +195,8 @@ def assemble(
 async def _load_candidates(
     session: AsyncSession, window_hours: int, regenerating: int | None = None
 ) -> list[Candidate]:
-    """Unstamped recent articles, plus (on --force) the articles of the issue being replaced."""
+    """Unstamped recent articles of the daily sections, plus (on --force) the articles of the
+    issue being replaced. Other sections (threat radar, research, management) stay unstamped."""
     cutoff = datetime.now(UTC) - timedelta(hours=window_hours)
     fresh = and_(Article.bulletin_id.is_(None), Article.fetched_at >= cutoff)
     scope = or_(fresh, Article.bulletin_id == regenerating) if regenerating is not None else fresh
@@ -197,10 +219,9 @@ async def _load_candidates(
                 [ArticleStatus.TRIAGED, ArticleStatus.ANALYZED, ArticleStatus.INTEGRATED]
             ),
             scope,
-            Article.section.isnot(None),
+            Article.section.in_([section.value for section in DAILY_SECTIONS]),
             or_(
                 Article.tier.in_([Tier.HIGH, Tier.MEDIUM]),
-                Article.section == THREAT_RADAR,
                 # Forwarded newsletters were picked by hand: the tier only ranks them.
                 FeedSource.feed_type == EMAIL_FEED_TYPE,
             ),
@@ -289,7 +310,6 @@ def _writer_prompt(issue_date: date, top: list[Story], analyses: dict[int, DeepA
         analysis = analyses.get(story.lead.article_id)
         if analysis:
             lines.append(f"Analisi: {analysis.summary}")
-            lines += [f"  * {insight}" for insight in analysis.insights]
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
 
@@ -343,19 +363,20 @@ async def generate_bulletin(
 
     stories = await cluster_candidates(candidates, gemini, settings.triage_concurrency)
     top, rest = select_top(stories, settings.top_stories)
-    radar = radar_items([c for c in candidates if c.section == THREAT_RADAR], settings.radar_cap)
 
     async with factory() as session:
-        lead_ids = [story.lead.article_id for story in top]
+        lead_ids = [
+            story.lead.article_id
+            for story in top[: settings.analysis_top_n]
+            if story.lead.content_len >= settings.analysis_min_chars
+        ]
         leads = list(
             (await session.execute(select(Article).where(Article.id.in_(lead_ids)))).scalars()
         )
     analyses, fresh = await _analyze_leads(leads, anthropic, gemini, settings)
 
     draft = await _write(issue_date, top, analyses, gemini)
-    data = assemble(
-        issue_date, draft, top, rest, radar, analyses, len(candidates), settings.section_cap
-    )
+    data = assemble(issue_date, draft, top, rest, analyses, len(candidates), settings.section_cap)
 
     async with factory() as session:
         # Replace the old issue in the same transaction as the new one: a failed
@@ -369,7 +390,7 @@ async def generate_bulletin(
             issue_date=issue_date,
             title=data.title,
             subtitle=data.subtitle,
-            editorial=data.editorial,
+            editorial="\n".join(data.key_points),
             content_json=data.model_dump_json(),
             articles_count=data.articles_count,
         )
@@ -410,6 +431,5 @@ async def generate_bulletin(
         stories=len(stories),
         top=len(top),
         analyzed=len(fresh),
-        radar=len(radar),
     )
     return bulletin

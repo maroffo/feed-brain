@@ -26,7 +26,11 @@ class Category(StrEnum):
 
 
 class Section(StrEnum):
-    """Bulletin sections, derived from the OPML folders (plan Appendix A)."""
+    """Bulletin sections, derived from the OPML folders (plan Appendix A).
+
+    THREAT_RADAR, RESEARCH and MANAGEMENT are still assigned by triage but stay out of the
+    daily issue (see DAILY_AREAS); stored issues may still carry them.
+    """
 
     SECURITY = "security"
     THREAT_RADAR = "threat_radar"
@@ -56,6 +60,15 @@ SECTION_TITLES: dict[Section, str] = {
     Section.CULTURE: "Cultura, idee e blog",
     Section.SPORT: "Sport",
 }
+
+# Daily issue reading order: areas first to last, sections in order inside each area.
+# Top stories are grouped by area; 'In breve' follows DAILY_SECTIONS.
+DAILY_AREAS: tuple[tuple[Section, ...], ...] = (
+    (Section.POLITICS, Section.ECONOMY),
+    (Section.CULTURE, Section.SPORT),
+    (Section.SECURITY, Section.AI, Section.TECH, Section.CLOUD_DEVOPS, Section.SOFTWARE),
+)
+DAILY_SECTIONS: tuple[Section, ...] = tuple(section for area in DAILY_AREAS for section in area)
 
 
 class ArticleStatus(StrEnum):
@@ -117,23 +130,18 @@ class SectionBlock(BaseModel):
     omitted: int = 0  # stories beyond the per-section cap (kept out of the email)
 
 
-class RadarItem(BaseModel):
-    title: str
-    url: str
-    source: str
-
-
 class BulletinData(BaseModel):
     """Self-contained daily issue: everything render and weekly need, no DB joins."""
 
     issue_date: date
     title: str
-    subtitle: str
-    editorial: str
+    key_points: list[str] = Field(default_factory=list)  # 'Il punto': one line per fact
     top_stories: list[TopStory]
     sections: list[SectionBlock]
-    radar: list[RadarItem]
     articles_count: int
+    # The first issues opened with a subtitle and a prose 'Il punto' instead of key points.
+    subtitle: str = ""
+    editorial: str = ""
 
 
 class WrittenStory(BaseModel):
@@ -146,8 +154,7 @@ class BulletinDraft(BaseModel):
     """Gemini writer output for the top of the bulletin."""
 
     title: str
-    subtitle: str
-    editorial: str
+    key_points: list[str]
     top_stories: list[WrittenStory]
 
 

@@ -12,7 +12,12 @@ articles: {{ data.articles_count }}
 {% if data.subtitle %}*{{ data.subtitle }}*
 
 {% endif %}
-{% if data.editorial %}## Il punto
+{% if data.key_points %}## Il punto
+
+{% for p in data.key_points %}- {{ p }}
+{% endfor %}
+
+{% elif data.editorial %}## Il punto
 
 {{ data.editorial }}
 
@@ -25,21 +30,20 @@ articles: {{ data.articles_count }}
 
 {{ story.text }}
 
+{% if story.analysis and story.analysis.money_quote %}> {{ story.analysis.money_quote }}
+
+{% endif %}
 {% for s in story.sources %}- {{ s.name }}: {{ s.title | md_link(s.url) }}
 {% endfor %}
-{% if story.analysis %}
-**Approfondimento.** {{ story.analysis.summary }}
-
+{% if story.analysis and story.analysis.insights %}
+**Approfondimento:**
 {% for i in story.analysis.insights %}- {{ i }}
 {% endfor %}
-{% if story.analysis.money_quote %}
-> {{ story.analysis.money_quote }}
 {% endif %}
-{% if story.analysis.actionables %}
+{% if story.analysis and story.analysis.actionables %}
 **Da fare:**
 {% for a in story.analysis.actionables %}- {{ a }}
 {% endfor %}
-{% endif %}
 {% endif %}
 
 {% endfor %}
@@ -52,8 +56,3 @@ articles: {{ data.articles_count }}
 {% endif %}
 
 {% endfor %}
-{% if data.radar %}## Radar minacce
-
-{% for r in data.radar %}- {{ r.title | md_link(r.url) }} ({{ r.source }})
-{% endfor %}
-{% endif %}
