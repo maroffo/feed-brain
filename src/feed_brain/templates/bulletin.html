@@ -20,7 +20,7 @@
 {% for story in data.top_stories %}
 {% set reserved = public and story.sources | selectattr("paid") | list %}
 <div class="story">
-<div class="k">{{ section_titles[story.section] }}{% if story.sources|length > 1 %} · {{ story.sources|length }} fonti{% endif %}</div>
+<div class="k">{{ section_titles[story.section] }}{% if story.sources|length > 1 %} · {{ story.sources|length }} fonti{% endif %}{{ m.thumbs(votes, story.sources[0].url) }}</div>
 <h3>{{ story.title }}</h3>
 {% if reserved %}
 {{ m.reserved_note() }}
@@ -49,6 +49,7 @@
 {% if item.summary and not reserved %}<span class="muted"> {{ item.summary }}</span>{% endif %}
 {#- The headline already links a single source: name the outlet only (email size). -#}
 {% if item.sources | length > 1 %}{{ m.sources(item.sources) }}{% else %}<span class="more"> · {{ item.sources[0].name }}</span>{% endif %}
+{{ m.thumbs(votes, item.sources[0].url) }}
 </div>
 {% endfor %}
 {% if block.omitted %}<div class="more">{{ block.omitted | folded }}</div>{% endif %}

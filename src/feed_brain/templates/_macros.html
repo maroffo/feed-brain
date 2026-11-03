@@ -1,4 +1,4 @@
-{#- ABOUTME: Shared macros for the HTML templates: links that may have no web page, source lists. -#}
+{#- ABOUTME: Shared macros for the HTML templates: links that may have no web page, source lists, votes. -#}
 {#- ABOUTME: A target that is not http(s) (newsletter digest, hostile feed URL) renders as plain text. -#}
 {% macro link(url, text, cls="") -%}
 {%- set href = url | safe_url -%}
@@ -15,4 +15,9 @@
 {%- endmacro %}
 {% macro reserved_note() -%}
 <p class="muted">Contenuto per abbonati: leggilo alla fonte.</p>
+{%- endmacro %}
+{% macro thumbs(votes, url) -%}
+{%- if votes -%}{%- set v = votes(url) -%}
+<span class="vote"> <a href="{{ v.up | safe_url }}" title="Mi interessa">👍</a> <a href="{{ v.down | safe_url }}" title="Non mi interessa">👎</a></span>
+{%- endif -%}
 {%- endmacro %}

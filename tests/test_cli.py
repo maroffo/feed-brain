@@ -81,3 +81,24 @@ def test_collect_dry_run_flag_reaches_the_pipeline(monkeypatch):
     monkeypatch.setattr("sys.argv", ["feed-brain", "collect", "--dry-run"])
     cli.main()
     assert seen == {"dry_run": True}
+
+
+def test_serve_runs_the_vote_service_on_the_cloud_run_port(monkeypatch):
+    """`serve` hands the vote app to uvicorn on $PORT, without access logs (links carry signatures)."""
+    import uvicorn
+    from pydantic import SecretStr
+
+    from feed_brain import __main__ as cli
+    from feed_brain.config import Settings
+
+    seen = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: seen.update(app=app, **kw))
+    monkeypatch.setattr(
+        "feed_brain.config.get_settings",
+        lambda: Settings(_env_file=None, feedback_key=SecretStr("k" * 32)),
+    )
+    monkeypatch.setenv("PORT", "9123")
+    monkeypatch.setattr("sys.argv", ["feed-brain", "serve"])
+    cli.main()
+    assert seen["port"] == 9123 and seen["host"] == "0.0.0.0" and seen["access_log"] is False
+    assert seen["app"].__class__.__name__ == "Starlette"

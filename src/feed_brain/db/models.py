@@ -1,9 +1,20 @@
 # ABOUTME: SQLAlchemy ORM models for the feed-brain database.
-# ABOUTME: FeedSource, Article, Bulletin (daily issue) and WeeklyDigest tables.
+# ABOUTME: FeedSource, Article, Bulletin (daily issue), WeeklyDigest and StoryVote tables.
 
 from datetime import UTC, date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 RSS_FEED_TYPE = "rss"  # imported from the OPML, downloaded by the fetcher
@@ -120,3 +131,28 @@ class WeeklyDigest(Base):
     )
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class StoryVote(Base):
+    """One 👍/👎 on a story of a daily issue, keyed by date and first-source hash.
+
+    No FK to bulletins: `bulletin --force` deletes and re-inserts the issue row, and the
+    snapshot (headline, section, sources) keeps the vote readable without it.
+    """
+
+    __tablename__ = "story_votes"
+    __table_args__ = (UniqueConstraint("issue_date", "story_key", name="uq_story_votes_story"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    issue_date: Mapped[date] = mapped_column(Date)
+    story_key: Mapped[str] = mapped_column(String(16))
+    vote: Mapped[str] = mapped_column(String(8))
+    headline: Mapped[str] = mapped_column(String(500))
+    section: Mapped[str] = mapped_column(String(50))
+    sources_json: Mapped[str] = mapped_column(Text)  # JSON list of SourceRef
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )

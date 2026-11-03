@@ -1,0 +1,30 @@
+{#- ABOUTME: Page behind a 👍/👎 link: shows the story, its script casts the vote (link scanners run no JS). -#}
+{#- ABOUTME: state: pending (GET), recorded or undone (POST), error; a <noscript> form is the no-JS fallback. -#}
+{% extends "_base.html" %}
+{% block content %}
+{% if headline %}<h3>{{ headline }}</h3>{% endif %}
+<p id="status">{{ message }}</p>
+{% if state == "pending" %}
+<noscript><form method="post"><button type="submit">Conferma {{ thumb }}</button></form></noscript>
+<p><button id="undo" type="button" hidden>Annulla</button></p>
+<script>
+(function () {
+  var status = document.getElementById("status");
+  var undo = document.getElementById("undo");
+  fetch(location.href, {method: "POST"}).then(function (r) {
+    status.textContent = r.ok ? "Registrato {{ thumb }}" : "Errore, riprova";
+    undo.hidden = !r.ok;
+  });
+  undo.onclick = function () {
+    fetch(location.href + "&undo=1", {method: "POST"}).then(function (r) {
+      status.textContent = r.ok ? "Voto annullato." : "Errore, riprova";
+      undo.hidden = r.ok;
+    });
+  };
+})();
+</script>
+{% elif state == "recorded" and undo_url %}
+<form method="post" action="{{ undo_url }}"><button type="submit">Annulla</button></form>
+{% endif %}
+{% endblock %}
+{% block footer %}feed-brain{% endblock %}

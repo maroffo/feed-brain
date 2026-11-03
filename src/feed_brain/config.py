@@ -86,6 +86,14 @@ class Settings(BaseSettings):
     sender_name: str = "feed-brain"
     digest_recipient: str | None = None
 
+    # Story votes: one-click 👍/👎 links in the email, served by the `serve` Cloud Run service.
+    # Both unset = no buttons. The key signs the links (job) and checks them (service).
+    feedback_url: str | None = (
+        None  # service base URL, e.g. https://feed-brain-feedback-xyz.run.app
+    )
+    feedback_key: SecretStr | None = None
+    feedback_max_age_days: int = 30  # votes on older issues are refused
+
     # Second Brain (Obsidian vault): local only, used by sync-vault and integrate on the Mac
     vault_path: Path = Path(
         "/Users/maroffo/Library/Mobile Documents/iCloud~md~obsidian/Documents/Second Brain"

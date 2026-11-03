@@ -1,5 +1,5 @@
 # ABOUTME: feed-brain on GCP: Cloud Run Job + daily Scheduler, DB/user on the shared Cloud SQL instance,
-# ABOUTME: public site bucket, private data bucket (outbox, OPML), image repo, service accounts, IAM.
+# ABOUTME: public site bucket, private data bucket (outbox, OPML), image repo, service accounts, IAM (vote service: feedback.tf).
 
 data "google_sql_database_instance" "shared" {
   name = var.sql_instance_name
@@ -60,6 +60,7 @@ locals {
       GEMINI_API_KEY = var.gemini_secret_id
       SES_USR        = var.ses_username_secret_id
       SES_PWD        = var.ses_password_secret_id
+      FEEDBACK_KEY   = google_secret_manager_secret.feedback_key.secret_id
     },
     var.anthropic_secret_id == null ? {} : { ANTHROPIC_API_KEY = var.anthropic_secret_id },
     var.fetch_proxy_secret_id == null ? {} : { FETCH_PROXY = var.fetch_proxy_secret_id },
@@ -217,6 +218,10 @@ resource "google_cloud_run_v2_job" "feed_brain" {
           name  = "INBOX_AUDIENCE"
           value = local.inbox_audience
         }
+        env {
+          name  = "FEEDBACK_URL"
+          value = google_cloud_run_v2_service.feedback.uri
+        }
 
         dynamic "env" {
           for_each = local.secret_env
@@ -237,6 +242,7 @@ resource "google_cloud_run_v2_job" "feed_brain" {
   depends_on = [
     google_secret_manager_secret_iam_member.job,
     google_secret_manager_secret_version.db_password,
+    google_secret_manager_secret_version.feedback_key,
   ]
 }
 

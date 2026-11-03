@@ -28,3 +28,7 @@ output "inbox_address" {
 output "inbox_bucket" {
   value = aws_s3_bucket.inbox.id
 }
+
+output "feedback_url" {
+  value = google_cloud_run_v2_service.feedback.uri
+}
