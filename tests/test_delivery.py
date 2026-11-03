@@ -24,7 +24,6 @@ def _bulletin_row() -> Bulletin:
         editorial="Il punto.",
         top_stories=[],
         sections=[],
-        radar=[],
         articles_count=0,
     )
     return Bulletin(
@@ -196,7 +195,6 @@ async def test_site_gets_the_public_variant_and_email_the_full_one(
             )
         ],
         sections=[],
-        radar=[],
         articles_count=1,
     )
     async with session_factory() as session:

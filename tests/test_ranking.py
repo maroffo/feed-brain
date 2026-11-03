@@ -1,10 +1,9 @@
 # ABOUTME: Tests for the deterministic story ranking used by the daily bulletin.
-# ABOUTME: Score = tier weight + multi-source boost + confidence; radar ordering and cap.
+# ABOUTME: Score = tier weight + multi-source boost + confidence; top selection and cap.
 
 from feed_brain.services.ranking import (
     Candidate,
     Story,
-    radar_items,
     rank_stories,
     select_top,
     source_boost,
@@ -74,20 +73,8 @@ def test_rank_orders_by_score_with_multi_source_beating_single_high():
     assert rank_stories([single_high, multi_medium])[0].headline == "b"
 
 
-def test_select_top_excludes_threat_radar_and_caps():
-    stories = [Story("threat_radar", [_c(1, tier="high", confidence=1.0)], "r")] + [
-        Story("tech", [_c(i, confidence=i / 100)], f"s{i}") for i in range(2, 8)
-    ]
+def test_select_top_caps_and_keeps_the_rest_ranked():
+    stories = [Story("tech", [_c(i, confidence=i / 100)], f"s{i}") for i in range(2, 8)]
     top, rest = select_top(stories, 3)
     assert [s.headline for s in top] == ["s7", "s6", "s5"]
-    assert {s.headline for s in rest} == {"s2", "s3", "s4"}
-
-
-def test_radar_items_sorted_by_tier_then_confidence_and_capped():
-    items = [
-        _c(1, tier="low", confidence=0.9, section="threat_radar"),
-        _c(2, tier="medium", confidence=0.5, section="threat_radar"),
-        _c(3, tier="high", confidence=0.1, section="threat_radar"),
-        _c(4, tier="low", confidence=0.2, section="threat_radar"),
-    ]
-    assert [c.article_id for c in radar_items(items, cap=3)] == [3, 2, 1]
+    assert [s.headline for s in rest] == ["s4", "s3", "s2"]

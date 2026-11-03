@@ -4,7 +4,6 @@
 from dataclasses import dataclass
 
 TIER_WEIGHT = {"high": 2.0, "medium": 1.0, "low": 0.0}
-THREAT_RADAR = "threat_radar"
 
 
 def source_boost(distinct_sources: int) -> float:
@@ -60,14 +59,6 @@ def rank_stories(stories: list[Story]) -> list[Story]:
 
 
 def select_top(stories: list[Story], n: int) -> tuple[list[Story], list[Story]]:
-    """Split ranked non-radar stories into the top n and the rest."""
-    ranked = rank_stories([s for s in stories if s.section != THREAT_RADAR])
+    """Split ranked stories into the top n and the rest."""
+    ranked = rank_stories(stories)
     return ranked[:n], ranked[n:]
-
-
-def radar_items(candidates: list[Candidate], cap: int) -> list[Candidate]:
-    """Threat radar entries: higher tier first (triage lifts Italian/widely used targets), capped."""
-    ordered = sorted(
-        candidates, key=lambda c: (-TIER_WEIGHT.get(c.tier, 0.0), -c.confidence, c.article_id)
-    )
-    return ordered[:cap]

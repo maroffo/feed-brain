@@ -55,7 +55,6 @@ def _bulletin_data(day: date, n: int) -> BulletinData:
             for i in range(n)
         ],
         sections=[],
-        radar=[],
         articles_count=n,
     )
 
@@ -197,8 +196,21 @@ def test_a_story_with_any_paid_source_gives_a_paid_weekly_link():
             )
         ],
         sections=[],
-        radar=[],
         articles_count=2,
     )
     _, refs = _prompt([day])
     assert (refs[0].url, refs[0].paid) == ("https://a/1", True)
+
+
+def test_weekly_prompt_uses_key_points_and_falls_back_to_the_prose_editorial():
+    from feed_brain.services.weekly import _prompt
+
+    new = _bulletin_data(MONDAY, 1).model_copy(
+        update={"editorial": "", "key_points": ["Primo fatto.", "Secondo fatto."]}
+    )
+    old = _bulletin_data(MONDAY + timedelta(days=1), 1)
+
+    prompt, _ = _prompt([new, old])
+
+    assert "Punti del giorno: Primo fatto. Secondo fatto." in prompt
+    assert f"Editoriale: Editoriale del {MONDAY + timedelta(days=1)}." in prompt

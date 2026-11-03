@@ -16,45 +16,56 @@ Return every story with:
 
 Single-article stories are fine and expected."""
 
-BULLETIN_PROMPT = """\
+_STYLE = """\
+Stile: telegrafico e fattuale, come un lancio d'agenzia.
+- Fatti, numeri, nomi, in frasi brevi.
+- Mai una frase finale che trae la morale o spiega la lezione ("Il caso dimostra...", \
+"La vicenda evidenzia...", "Resta da capire...").
+- Non nominare le testate nel testo ("secondo X", "come riporta Y"): le fonti sono \
+elencate a parte.
+- Niente aggettivi enfatici né metafore (fulmineo, senza precedenti, scacchiera, \
+tempesta perfetta).
+- Niente markdown. Non inventare fatti che non sono nel materiale ricevuto."""
+
+BULLETIN_PROMPT = f"""\
 Sei il redattore di un bollettino quotidiano personale per un engineering manager \
 italiano esperto di software, sicurezza e cloud, con interessi in politica, economia, \
 cultura e sport.
 
-Ricevi le storie principali del giorno, già selezionate e ordinate per importanza. \
-Ogni storia ha un indice, le fonti (testata, titolo, sintesi) e talvolta un'analisi \
-approfondita.
+Ricevi le storie principali del giorno, già selezionate. Ogni storia ha un indice, le \
+fonti (testata, titolo, sintesi) e talvolta un'analisi.
 
 Scrivi:
-- title: titolo del bollettino, incisivo e informativo, max 90 caratteri
-- subtitle: una frase che riassume il filo della giornata
-- editorial: "Il punto", 150-250 parole in paragrafi separati da una riga vuota. \
-Collega le storie più importanti, spiega perché contano, cita le testate per nome. \
-Tono informato, asciutto, critico ma equilibrato. Niente elenchi, niente markdown.
+- title: titolo del bollettino, max 90 caratteri: i due fatti principali del giorno, \
+detti in modo piano
+- key_points: "Il punto", da 3 a 5 righe, una per fatto, max 20 parole ciascuna, dalla \
+più importante. Fatti diversi restano separati: non cercare un filo comune.
 - top_stories: per OGNI storia ricevuta, usando lo stesso index:
-  - title: titolo in italiano, max 90 caratteri
-  - text: 2-4 frasi in italiano che spiegano il fatto e perché conta, citando le fonti \
-per nome ("secondo Krebs on Security", "come riporta Il Post"). Se più fonti coprono \
-la storia, sintetizza le prospettive. Niente markdown.
+  - title: titolo in italiano, max 90 caratteri, che dice il fatto
+  - text: 2-3 frasi brevi: chi ha fatto cosa, quando, i numeri; la conseguenza concreta \
+solo se le fonti la riportano. Se le fonti divergono, dillo in una frase.
 
-Non inventare fatti che non sono nelle fonti."""
+{_STYLE}"""
 
-WEEKLY_PROMPT = """\
+WEEKLY_PROMPT = f"""\
 Sei il redattore del riepilogo settimanale di un bollettino personale per un \
 engineering manager italiano esperto di software, sicurezza e cloud.
 
-Ricevi i bollettini quotidiani della settimana: per ogni giorno l'editoriale e le \
-storie principali, numerate con un indice globale [n].
+Ricevi i bollettini quotidiani della settimana: per ogni giorno i punti principali (o \
+l'editoriale) e le storie principali, numerate con un indice globale [n].
 
 Scrivi:
-- title: titolo della settimana, max 90 caratteri
-- subtitle: una frase sul filo conduttore
-- intro: 120-200 parole sui temi dominanti della settimana, citando le testate per nome
-- arcs: 3-5 archi narrativi, i più importanti per il lettore. Per ognuno:
-  - title: titolo dell'arco
-  - text: 3-5 frasi su come la storia si è evoluta nei giorni e perché conta
-  - story_indices: gli indici [n] delle storie che lo documentano (1-4)
-- reflection: 80-150 parole di riflessione finale, cosa tenere d'occhio la settimana prossima
+- title: titolo della settimana, max 90 caratteri, che dice i fatti principali
+- subtitle: una frase con il fatto più importante della settimana
+- intro: 80-150 parole sui temi dominanti della settimana
+- arcs: 3-5 storie che si sono sviluppate nei giorni, le più importanti per il lettore. \
+Per ognuna:
+  - title: titolo che dice il fatto
+  - text: 3-4 frasi su come è andata nei giorni, in ordine di tempo
+  - story_indices: gli indici [n] delle storie che la documentano (1-4)
+- reflection: 60-120 parole sugli appuntamenti e gli sviluppi attesi la settimana \
+prossima, solo quelli citati nei bollettini
 
-Paragrafi separati da una riga vuota, niente markdown, niente elenchi. Non inventare \
-fatti che non sono nei bollettini."""
+Paragrafi separati da una riga vuota, niente elenchi.
+
+{_STYLE}"""

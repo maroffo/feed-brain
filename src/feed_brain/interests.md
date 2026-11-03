@@ -1,5 +1,5 @@
 # ABOUTME: Reader interest profile injected into the triage prompt; edit freely, no code changes needed.
-# ABOUTME: Tiers drive bulletin selection (high/medium in, low out except threat_radar); sections are separate.
+# ABOUTME: Tiers drive bulletin selection (high/medium in, low out); sections are separate.
 
 ## Interest profile
 
@@ -13,7 +13,7 @@
 **Medium interest (tier: medium)**
 - Tech industry news with substance: regulation, antitrust, major outages, platform shifts
 - Python tooling, CLI tools, terminal workflows; Docker, containers, security hardening
-- Agile and team practices, leadership, hiring, project management with novel frameworks
+- Engineering leadership, hiring, team practices
 - Italian and European politics, geopolitics, trade policy; justice system and prison reform
 - Economics with data or original analysis: Italian public finance, labor, EU economy
 - Research papers in software engineering and AI with practical, reproducible results
@@ -26,6 +26,7 @@
 - Gadget reviews, deals, consumer electronics news
 - Match reports and results without analysis
 - Basic tutorials, beginner guides, marketing, business strategy (unless novel frameworks), hype pieces, AI doomerism, sales pitches
+- Agile methodology, Scrum, project management
 
 ## Quality signals (raise the tier)
 - Original analysis with data or experience

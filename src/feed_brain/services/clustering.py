@@ -1,4 +1,4 @@
-# ABOUTME: Groups a day's candidates into stories, one Gemini call per section (threat_radar excluded).
+# ABOUTME: Groups a day's candidates into stories, one Gemini call per section.
 # ABOUTME: normalize_clusters repairs LLM output: unknown ids dropped, duplicates first-wins, gaps → singletons.
 
 import asyncio
@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from feed_brain.ai.gemini import GeminiError
 from feed_brain.ai.prompts import CLUSTER_PROMPT
-from feed_brain.services.ranking import THREAT_RADAR, Candidate, Story
+from feed_brain.services.ranking import Candidate, Story
 from feed_brain.textutil import clean_text
 
 log = structlog.get_logger()
@@ -76,11 +76,10 @@ async def _cluster_section(
 async def cluster_candidates(
     candidates: list[Candidate], gemini: ClusterLLM, concurrency: int
 ) -> list[Story]:
-    """Cluster every non-radar section concurrently; returns stories of all sections."""
+    """Cluster every section concurrently; returns stories of all sections."""
     by_section: dict[str, list[Candidate]] = defaultdict(list)
     for c in candidates:
-        if c.section != THREAT_RADAR:
-            by_section[c.section].append(c)
+        by_section[c.section].append(c)
 
     semaphore = asyncio.Semaphore(concurrency)
 

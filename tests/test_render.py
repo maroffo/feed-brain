@@ -7,7 +7,6 @@ from feed_brain.models import (
     BriefItem,
     BulletinData,
     DeepAnalysis,
-    RadarItem,
     Section,
     SectionBlock,
     SourceRef,
@@ -22,8 +21,7 @@ from feed_brain.services.render import (
 DATA = BulletinData(
     issue_date=date(2026, 11, 2),
     title="Ransomware e <script>",
-    subtitle="Una giornata intensa",
-    editorial="Primo paragrafo.\n\nSecondo paragrafo.",
+    key_points=["Primo fatto del giorno.", "Secondo fatto."],
     top_stories=[
         TopStory(
             title="Breccia in Italia",
@@ -54,22 +52,30 @@ DATA = BulletinData(
             ],
         )
     ],
-    radar=[
-        RadarItem(title="LockBit claims Acme SpA", url="https://ransomfeed/1", source="Ransom Feed")
-    ],
     articles_count=42,
 )
+
+
+def _brief_block(headline: str, url: str) -> SectionBlock:
+    source = SourceRef(name="Feed", title=headline, url=url)
+    return SectionBlock(
+        key=Section.TECH,
+        title="Tech",
+        items=[BriefItem(headline=headline, summary="", sources=[source])],
+    )
 
 
 def test_html_contains_all_parts_and_escapes():
     html = render_bulletin_html(DATA)
     assert "2 novembre 2026" in html
     assert "Ransomware e &lt;script&gt;" in html and "<script>" not in html
-    assert html.count("<p") >= 2 and "Secondo paragrafo." in html
+    assert "<li>Primo fatto del giorno.</li>" in html and "<li>Secondo fatto.</li>" in html
     assert 'href="https://krebs/a"' in html and "Il Post" in html
-    assert "Approfondimento" in html and "The quote." in html and "Verifica i backup" in html
+    assert "The quote." in html and "Insight uno" in html and "Verifica i backup" in html
+    # the analysis summary feeds the writer, the issue does not repeat it
+    assert "Analisi lunga." not in html
     assert "Sport" in html and "Rugby: Italia batte Francia" in html
-    assert "Radar minacce" in html and "LockBit claims Acme SpA" in html
+    assert "Radar minacce" not in html
     assert '<meta name="robots" content="noindex' in html
     assert "42 articoli" in html
 
@@ -80,8 +86,10 @@ def test_markdown_note_has_frontmatter_and_links():
     assert "date: 2026-11-02" in md
     assert "# Ransomware e <script>" in md
     assert "[Big breach](https://krebs/a)" in md
-    assert "> The quote." in md
-    assert "## Sport" in md and "## Radar minacce" in md
+    assert "## Il punto\n\n- Primo fatto del giorno.\n- Secondo fatto.\n" in md
+    assert "> The quote." in md and "- Insight uno" in md and "- Verifica i backup" in md
+    assert "Analisi lunga." not in md
+    assert "## Sport" in md and "Radar minacce" not in md
 
 
 def test_write_bulletin_files(tmp_path):
@@ -103,9 +111,7 @@ def test_safe_url_blocks_non_http_schemes():
 
 
 def test_html_neutralizes_javascript_links_from_feeds():
-    evil = DATA.model_copy(
-        update={"radar": [RadarItem(title="x", url="javascript:alert(1)", source="Evil")]}
-    )
+    evil = DATA.model_copy(update={"sections": [_brief_block("x", "javascript:alert(1)")]})
     html = render_bulletin_html(evil)
     assert "javascript:" not in html
 
@@ -147,7 +153,7 @@ def test_markdown_links_are_escaped():
     assert md_url("https://w/Foo_(bar) x") == "https://w/Foo_%28bar%29%20x"
     assert md_url("javascript:alert(1)") == "#"
     tricky = DATA.model_copy(
-        update={"radar": [RadarItem(title="Evil [x](y)", url="https://w/Foo_(bar)", source="S")]}
+        update={"sections": [_brief_block("Evil [x](y)", "https://w/Foo_(bar)")]}
     )
     assert "[Evil \\[x\\](y)](https://w/Foo_%28bar%29)" in render_bulletin_md(tricky)
 
@@ -208,7 +214,6 @@ PAID_DATA = DATA.model_copy(
 )
 PAID_TEXT = (
     "Testo tratto dal post a pagamento",
-    "Analisi riservata",
     "Insight riservato",
     "Citazione riservata",
     "Azione riservata",
@@ -246,12 +251,10 @@ def test_sources_without_a_web_page_render_as_plain_text():
                     ],
                 )
             ],
-            "radar": [RadarItem(title="Radar digest", url="mid:def@x", source="Newsletter")],
         }
     )
     html = render_bulletin_html(data)
     assert "Digest della settimana" in html and "Newsletter" in html
-    assert "Radar digest" in html
     assert "mid:" not in html and 'href="#"' not in html
 
 
@@ -307,3 +310,28 @@ def test_single_source_brief_names_its_source_without_repeating_the_link():
     assert html.count('href="https://onrugby/x"') == 1
     assert "On Rugby" in html and "On Rugby: Italia" not in html
     assert "Krebs: A" in html and "Il Post: B" in html
+
+
+def test_notes_appear_only_when_the_story_carries_them():
+    quote_only = DeepAnalysis(
+        summary="S.", insights=[], money_quote="Solo la citazione.", actionables=[]
+    )
+    story = DATA.top_stories[0].model_copy(update={"analysis": quote_only})
+    html = render_bulletin_html(DATA.model_copy(update={"top_stories": [story]}))
+    assert "Solo la citazione." in html
+    assert "Da fare" not in html and "Approfondimento" not in html
+
+
+def test_issues_stored_with_a_prose_editorial_still_render_it():
+    """The first issues carry 'Il punto' as prose paragraphs instead of key points."""
+    legacy = DATA.model_copy(
+        update={
+            "key_points": [],
+            "subtitle": "Una giornata",
+            "editorial": "Primo paragrafo.\n\nSecondo paragrafo.",
+        }
+    )
+    html = render_bulletin_html(legacy)
+    assert "<p>Primo paragrafo.</p>" in html and "<p>Secondo paragrafo.</p>" in html
+    assert "Una giornata" in html
+    assert "Primo paragrafo." in render_bulletin_md(legacy)

@@ -64,9 +64,10 @@ class Settings(BaseSettings):
 
     # Daily bulletin
     candidate_window_hours: int = 36
-    top_stories: int = 10
-    radar_cap: int = 15
-    section_cap: int = 6  # 'In breve' items per section; keeps the email under Gmail's 102 KB clip
+    top_stories: int = 5
+    analysis_top_n: int = 3  # Opus analyzes the leads of the first N top stories only
+    analysis_min_chars: int = 1500  # leads with less content (title-only feed items) skip Opus
+    section_cap: int = 3  # 'In breve' items per section; forwarded newsletters always shown
     analysis_concurrency: int = 3
 
     # Delivery: public site + private data bucket (outbox, OPML copy)

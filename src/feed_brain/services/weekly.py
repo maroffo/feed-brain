@@ -78,7 +78,9 @@ def _prompt(days: list[BulletinData]) -> tuple[str, list[SourceRef]]:
         lines = [
             f"## {italian_date(data.issue_date)} ({data.issue_date.isoformat()}): {data.title}"
         ]
-        if data.editorial:
+        if data.key_points:
+            lines.append(f"Punti del giorno: {' '.join(data.key_points)}")
+        elif data.editorial:
             lines.append(f"Editoriale: {data.editorial}")
         for story in data.top_stories:
             outlets = ", ".join(s.name for s in story.sources)
