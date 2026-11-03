@@ -7,6 +7,7 @@ from feed_brain.models import BriefItem, BulletinData, Section, SectionBlock, So
 from feed_brain.services.feedback import (
     VoteLinks,
     find_story,
+    link_secret,
     signature,
     story_key,
     valid_signature,
@@ -61,6 +62,7 @@ def test_a_signature_checks_out_only_for_the_exact_date_story_and_vote():
     assert not valid_signature(b"x" * 32, DAY, "abc", "up", sig)
     assert not valid_signature(SECRET, DAY, "abc", "up", sig[:-1])
     assert not valid_signature(SECRET, DAY, "abc", "up", "")
+    assert not valid_signature(SECRET, DAY, "abc", "up", "è" * 22)  # non-ASCII: refused, no crash
 
 
 def test_signatures_are_url_safe_and_128_bits():
@@ -86,3 +88,17 @@ def test_find_story_resolves_top_stories_and_briefs_by_their_first_source():
     # a second source does not identify the story, an unknown key finds nothing
     assert find_story(ISSUE, story_key("https://p/cold")) is None
     assert find_story(ISSUE, "0000000000") is None
+
+
+def test_link_secret_needs_a_real_key():
+    from pydantic import SecretStr
+
+    from feed_brain.config import Settings
+
+    def secret(value):
+        return link_secret(Settings(_env_file=None, feedback_key=value))
+
+    assert secret(None) is None
+    assert secret(SecretStr("")) is None and secret(SecretStr(" " * 40)) is None
+    assert secret(SecretStr("short")) is None  # under 32 chars
+    assert secret(SecretStr(" " + "k" * 32 + "\n")) == b"k" * 32

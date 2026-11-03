@@ -7,10 +7,20 @@ import hmac
 from dataclasses import dataclass
 from datetime import date
 
+from feed_brain.config import Settings
 from feed_brain.models import BulletinData, SourceRef
 
 VOTES = ("up", "down")
 SIGNATURE_BYTES = 16  # 128 bits
+MIN_KEY_CHARS = 32
+
+
+def link_secret(settings: Settings) -> bytes | None:
+    """The link-signing key, or None when unset, blank or shorter than MIN_KEY_CHARS."""
+    if settings.feedback_key is None:
+        return None
+    key = settings.feedback_key.get_secret_value().strip()
+    return key.encode("utf-8") if len(key) >= MIN_KEY_CHARS else None
 
 
 def story_key(first_source_url: str) -> str:
@@ -26,7 +36,9 @@ def signature(secret: bytes, issue_date: date, key: str, vote: str) -> str:
 
 
 def valid_signature(secret: bytes, issue_date: date, key: str, vote: str, sig: str) -> bool:
-    return hmac.compare_digest(signature(secret, issue_date, key, vote), sig)
+    """Constant-time check; bytes, because compare_digest rejects non-ASCII str."""
+    expected = signature(secret, issue_date, key, vote).encode("ascii")
+    return hmac.compare_digest(expected, sig.encode("utf-8"))
 
 
 class VoteLinks:

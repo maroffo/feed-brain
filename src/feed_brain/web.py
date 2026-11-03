@@ -18,7 +18,13 @@ from feed_brain.config import Settings, get_settings
 from feed_brain.db.models import Bulletin, StoryVote
 from feed_brain.db.session import close_db, get_session_factory
 from feed_brain.models import BulletinData
-from feed_brain.services.feedback import VOTES, StorySnapshot, find_story, valid_signature
+from feed_brain.services.feedback import (
+    VOTES,
+    StorySnapshot,
+    find_story,
+    link_secret,
+    valid_signature,
+)
 from feed_brain.services.render import render_vote_page
 
 log = structlog.get_logger()
@@ -68,9 +74,9 @@ async def _undo(day: date, key: str) -> None:
 
 def create_app(settings: Settings | None = None) -> Starlette:
     settings = settings or get_settings()
-    if settings.feedback_key is None:
-        raise ValueError("FEEDBACK_KEY is required to check vote links")
-    secret = settings.feedback_key.get_secret_value().encode("utf-8")
+    secret = link_secret(settings)
+    if secret is None:
+        raise ValueError("FEEDBACK_KEY (at least 32 characters) is required to check vote links")
     max_age = timedelta(days=settings.feedback_max_age_days)
 
     async def resolve(request: Request) -> tuple[date, str, str, StorySnapshot] | Response:

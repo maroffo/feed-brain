@@ -11,7 +11,7 @@ from feed_brain.db.models import Bulletin, WeeklyDigest
 from feed_brain.db.session import get_session_factory
 from feed_brain.models import BulletinData, WeeklyData
 from feed_brain.services.bulletin import italian_date
-from feed_brain.services.feedback import VoteLinks
+from feed_brain.services.feedback import VoteLinks, link_secret
 from feed_brain.services.mailer import send_email
 from feed_brain.services.outbox import queue_digest, queue_entries
 from feed_brain.services.render import (
@@ -34,9 +34,9 @@ INDEX_WEEKLIES = 26
 
 def vote_links(data: BulletinData, settings: Settings) -> VoteLinks | None:
     """Signed 👍/👎 links for the email, or None when the feedback service is not configured."""
-    if not (settings.feedback_url and settings.feedback_key):
+    secret = link_secret(settings)
+    if not settings.feedback_url or secret is None:
         return None
-    secret = settings.feedback_key.get_secret_value().encode("utf-8")
     return VoteLinks(settings.feedback_url, secret, data.issue_date)
 
 

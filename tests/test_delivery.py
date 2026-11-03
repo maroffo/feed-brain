@@ -269,3 +269,13 @@ async def test_email_gets_vote_links_only_when_the_feedback_service_is_configure
     assert f'href="{links["up"]}"' in sent.html[0] and f'href="{links["down"]}"' in sent.html[0]
     assert "👍" not in site.read_text("bulletins/2026-11-02.html")
     assert "👍" not in sent.html[1]
+
+
+def test_no_vote_links_with_a_blank_key():
+    from feed_brain.services.delivery import vote_links
+
+    data = BulletinData(issue_date=DAY, title="t", top_stories=[], sections=[], articles_count=0)
+    blank = SETTINGS.model_copy(
+        update={"feedback_url": "https://fb.run.app", "feedback_key": SecretStr("  ")}
+    )
+    assert vote_links(data, blank) is None

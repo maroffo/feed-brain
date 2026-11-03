@@ -11,15 +11,17 @@
 (function () {
   var status = document.getElementById("status");
   var undo = document.getElementById("undo");
-  fetch(location.href, {method: "POST"}).then(function (r) {
+  var here = location.pathname + location.search;  // never the #fragment
+  function failed() { status.textContent = "Errore di rete, riprova"; }
+  fetch(here, {method: "POST"}).then(function (r) {
     status.textContent = r.ok ? "Registrato {{ thumb }}" : "Errore, riprova";
     undo.hidden = !r.ok;
-  });
+  }).catch(failed);
   undo.onclick = function () {
-    fetch(location.href + "&undo=1", {method: "POST"}).then(function (r) {
+    fetch(here + "&undo=1", {method: "POST"}).then(function (r) {
       status.textContent = r.ok ? "Voto annullato." : "Errore, riprova";
       undo.hidden = r.ok;
-    });
+    }).catch(failed);
   };
 })();
 </script>

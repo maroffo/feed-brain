@@ -134,7 +134,9 @@ async def test_forged_or_malformed_links_are_refused_without_writing(session_fac
         unsigned = await client.post(f"/v/{TODAY}/{key}/up")
         bad_vote = await client.post(f"/v/{TODAY}/{key}/meh?s={good}")
         bad_date = await client.post(f"/v/2026-13-40/{key}/up?s={good}")
+        non_ascii = await client.post(f"/v/{TODAY}/{key}/up?s=%C3%A8")
     assert tampered.status_code == 403 and unsigned.status_code == 403
+    assert non_ascii.status_code == 403
     assert bad_vote.status_code == 404 and bad_date.status_code == 404
     assert await _votes(session_factory) == []
 
@@ -159,8 +161,20 @@ async def test_health_check(session_factory):  # noqa: ARG001
     assert response.status_code == 200 and response.text == "ok"
 
 
-def test_the_service_refuses_to_start_without_a_key():
+def test_the_service_refuses_to_start_without_a_real_key():
     import pytest
 
-    with pytest.raises(ValueError, match="FEEDBACK_KEY"):
-        create_app(Settings(_env_file=None))
+    for key in (None, SecretStr(""), SecretStr("   ")):
+        with pytest.raises(ValueError, match="FEEDBACK_KEY"):
+            create_app(Settings(_env_file=None, feedback_key=key))
+
+
+async def test_the_page_script_handles_network_errors_and_undoes_on_the_query_string(
+    session_factory,
+):
+    await _seed(session_factory)
+    async with _client() as client:
+        page = await client.get(_link("up"))
+    assert page.text.count(".catch(") == 2
+    assert "location.pathname + location.search" in page.text
+    assert "location.href" not in page.text  # a #fragment would swallow '&undo=1'
