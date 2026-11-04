@@ -203,10 +203,11 @@ def essay_footer(read: int, total: int) -> str:
 def render_essay_page(story: TopStory, issue_date: date) -> str:
     """Private page of the vote service with the essay behind a top story."""
     day = italian_date(issue_date)
+    sources = len(story.sources)
+    count = f" · {sources} fonti" if sources > 1 else ""
     return _env.get_template("essay.html").render(
         story=story,
-        section_title=SECTION_TITLES[story.section],
-        footer=essay_footer(story.essay.sources_read, len(story.sources)) if story.essay else "",
+        footer=essay_footer(story.essay.sources_read, sources) if story.essay else "",
         page_title=f"{story.title} · il quadro completo",
-        kicker=f"Il quadro completo · {day}",
+        kicker=f"Il quadro completo · {SECTION_TITLES[story.section]}{count} · {day}",
     )

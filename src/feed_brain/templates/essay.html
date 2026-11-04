@@ -1,13 +1,33 @@
-{#- ABOUTME: Private page behind a top story's essay link: the Opus essay, then the sources it read. -#}
+{#- ABOUTME: Private page behind a top story's essay link: lede, titled sections, things to watch, sources. -#}
 {#- ABOUTME: Served by the vote service with no-referrer, so the source sites never see the signed URL. -#}
 {% extends "_base.html" %}
 {% import "_macros.html" as m %}
+{% block style %}
+h1.essay{font-size:24px;line-height:1.25;margin:6px 0 14px}
+p.lede{font-size:18px;line-height:1.5;margin:0 0 6px}
+h2.essay{font-size:18px;border:0;padding:0;margin:24px 0 6px}
+.body p{font-size:17px;line-height:1.65}
+ul.watch{margin:6px 0 0 20px;padding:0;font-size:16px;line-height:1.55}
+ul.watch li{margin-bottom:4px}
+{% endblock %}
 {% block content %}
-<div class="k">{{ section_title }}{% if story.sources|length > 1 %} · {{ story.sources|length }} fonti{% endif %}</div>
-<h1>{{ story.title }}</h1>
+<h1 class="essay">{{ story.title }}</h1>
+<div class="body">
+{% if story.essay.lede %}<p class="lede">{{ story.essay.lede }}</p>{% endif %}
+{% for section in story.essay.sections %}
+<h2 class="essay">{{ section.heading }}</h2>
+{% for paragraph in section.paragraphs %}<p>{{ paragraph }}</p>
+{% endfor %}
+{% endfor %}
+{#- Essays written before sections are plain paragraphs. -#}
 {% for paragraph in story.essay.paragraphs %}<p>{{ paragraph }}</p>
 {% endfor %}
-<h2 class="s">Fonti</h2>
-{{ m.sources(story.sources) }}
+{% if story.essay.watch %}
+<h2 class="essay">Cosa seguire</h2>
+<ul class="watch">{% for item in story.essay.watch %}<li>{{ item }}</li>{% endfor %}</ul>
+{% endif %}
+</div>
+<h2 class="essay">Fonti</h2>
+<ul class="radar">{% for s in story.sources %}<li>{{ m.link(s.url, s.name ~ ": " ~ s.title) }}</li>{% endfor %}</ul>
 {% endblock %}
 {% block footer %}{{ footer }}{% endblock %}

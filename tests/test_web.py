@@ -290,3 +290,34 @@ async def test_votes_and_essays_reach_a_thematic_issue_of_the_same_day(session_f
         "Kubernetes 2.0",
         "Frigoriferi <b>sotto</b> attacco",
     }
+
+
+async def test_the_essay_page_reads_as_lede_sections_watch_list_and_source_list(session_factory):
+    from feed_brain.models import EssaySection
+
+    essay = StoryEssay(
+        lede="Cosa è successo e <b>perché</b> conta.",
+        sections=[
+            EssaySection(heading="Come sono entrati", paragraphs=["Uno.", "Due."]),
+            EssaySection(heading="Chi c'è dietro", paragraphs=["Tre."]),
+        ],
+        watch=["L'indagine belga", "Le patch Danfoss"],
+        sources_read=1,
+    )
+    await _seed(session_factory, essay=essay)
+    async with _client() as client:
+        page = (await client.get(_essay_link())).text
+    # one kicker line: what the page is, the section, the date
+    assert page.count('<div class="k">') == 1 and "Il quadro completo · Sicurezza" in page
+    assert '<p class="lede">Cosa è successo e &lt;b&gt;perché&lt;/b&gt; conta.</p>' in page
+    assert page.index("Come sono entrati") < page.index("Uno.") < page.index("Chi c&#39;è dietro")
+    assert "<h2" in page and "Cosa seguire" in page and "<li>Le patch Danfoss</li>" in page
+    # sources one per line, not a dotted run
+    assert '<li><a href="https://g/fridges">Guardian: Fridges</a></li>' in page
+
+
+async def test_essays_written_before_sections_still_read(session_factory):
+    await _seed(session_factory, essay=ESSAY)  # paragraphs only
+    async with _client() as client:
+        page = (await client.get(_essay_link())).text
+    assert "<p>Primo &lt;i&gt;paragrafo&lt;/i&gt;.</p>" in page and "Cosa seguire" not in page

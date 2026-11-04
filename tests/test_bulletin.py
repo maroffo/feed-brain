@@ -613,7 +613,7 @@ async def test_lead_analyses_and_essays_share_one_opus_concurrency_budget(
 
     async def fake_opus(*_args):
         await opus_call()
-        return EssayDraft(paragraphs=["P."])
+        return EssayDraft(lede="L.", sections=[], watch=[])
 
     monkeypatch.setattr(bulletin_mod, "deep_analyze", fake_deep_analyze)
     monkeypatch.setattr(bulletin_mod, "write_essays", essay_mod.write_essays)  # the real one

@@ -3,6 +3,7 @@
 
 from feed_brain.config import Settings
 from feed_brain.db.models import Article
+from feed_brain.models import EssaySection
 from feed_brain.services import essay as essay_mod
 from feed_brain.services.essay import EssayDraft, essay_prompt, write_essays
 from feed_brain.services.ranking import Candidate, Story
@@ -64,7 +65,16 @@ async def test_write_essays_keys_by_lead_and_cleans_paragraphs(monkeypatch):
         assert schema is EssayDraft and "<source>" in user
         if title == "rifiutata":
             return None  # refusal, truncation or API error
-        return EssayDraft(paragraphs=["  Primo\x00 paragrafo. ", "", "Secondo."])
+        return EssayDraft(
+            lede="  L'essenziale\x00 in due frasi. ",
+            sections=[
+                EssaySection(
+                    heading=" Come sono entrati ", paragraphs=["  Primo. ", "", "Secondo."]
+                ),
+                EssaySection(heading="Vuota", paragraphs=["  "]),
+            ],
+            watch=[" L'indagine belga ", ""],
+        )
 
     monkeypatch.setattr(essay_mod, "opus_structured", fake_opus)
     good = Story("security", [_cand(1), _cand(2)], "buona")
@@ -75,13 +85,20 @@ async def test_write_essays_keys_by_lead_and_cleans_paragraphs(monkeypatch):
 
     assert sorted(calls) == ["buona", "rifiutata"]
     assert set(essays) == {good.lead.article_id}
-    assert essays[good.lead.article_id].paragraphs == ["Primo paragrafo.", "Secondo."]
-    assert essays[good.lead.article_id].sources_read == 1
+    essay = essays[good.lead.article_id]
+    assert essay.lede == "L'essenziale in due frasi."
+    assert essay.sections == [
+        EssaySection(heading="Come sono entrati", paragraphs=["Primo.", "Secondo."])
+    ]
+    assert essay.watch == ["L'indagine belga"]
+    assert essay.sources_read == 1 and essay.paragraphs == []
 
 
 async def test_no_client_or_an_empty_essay_means_no_essay(monkeypatch):
     async def empty(*_args):
-        return EssayDraft(paragraphs=["  ", ""])
+        return EssayDraft(
+            lede="  ", sections=[EssaySection(heading="H", paragraphs=[""])], watch=["W"]
+        )
 
     monkeypatch.setattr(essay_mod, "opus_structured", empty)
     story = Story("security", [_cand(1)], "h")
