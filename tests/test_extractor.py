@@ -131,3 +131,28 @@ async def test_extract_content_never_parses_an_image(monkeypatch):
     )
     url = "https://images.dday.it/x/crop.jpg"
     assert await extract_content(url, Settings(_env_file=None)) is None
+
+
+def test_plain_text_quoting_markup_is_measured_as_text(monkeypatch):
+    """A security article quoting '<script>' must not shrink to nothing when measured."""
+    from feed_brain.services import extractor
+
+    article = "Il payload inietta <script> nella pagina. " + "Dettagli tecnici. " * 200
+    monkeypatch.setattr(
+        extractor, "_extract_with_readability", lambda _h: "<p>" + "teaser " * 30 + "</p>"
+    )
+    monkeypatch.setattr(extractor, "_extract_with_trafilatura", lambda _h: article)
+    assert extractor.extract_from_html("<html/>") == article
+
+
+def test_a_trafilatura_crash_keeps_the_readability_result(monkeypatch):
+    from feed_brain.services import extractor
+
+    def crash(_html):
+        raise RuntimeError("malformed")
+
+    monkeypatch.setattr(
+        extractor, "_extract_with_readability", lambda _h: "<p>" + "breve " * 30 + "</p>"
+    )
+    monkeypatch.setattr(extractor, "_extract_with_trafilatura", crash)
+    assert "breve" in extractor.extract_from_html("<html/>")

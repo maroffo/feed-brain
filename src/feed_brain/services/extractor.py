@@ -87,10 +87,15 @@ SHORT_TEXT_CHARS = 1500  # below this, readability may have kept only a teaser: 
 _NOT_PAGES = ("image/", "video/", "audio/", "application/octet-stream", "font/")
 
 
-def _text_length(content: str | None) -> int:
+def visible_length(content: str | None) -> int:
+    """Characters a reader sees. Readability output is HTML (it starts with a tag) and is
+    parsed; anything else is plain text and is counted as is, so an article quoting
+    '<script>' keeps its length."""
     if not content:
         return 0
-    return len(BeautifulSoup(content, "html.parser").get_text(" ", strip=True))
+    if content.lstrip().startswith("<"):
+        return len(BeautifulSoup(content, "html.parser").get_text(" ", strip=True))
+    return len(content.strip())
 
 
 def _best_extraction(html: str) -> tuple[str | None, str]:
@@ -101,10 +106,15 @@ def _best_extraction(html: str) -> tuple[str | None, str]:
     except Exception as e:  # noqa: BLE001 - any parser failure falls through to trafilatura
         log.warning("readability_failed", error=str(e)[:120])
         readable = None
-    if _text_length(readable) >= SHORT_TEXT_CHARS:
+    readable_length = visible_length(readable)
+    if readable_length >= SHORT_TEXT_CHARS:
         return readable, "readability"
-    fallback = _extract_with_trafilatura(html)
-    if _text_length(fallback) > _text_length(readable):
+    try:
+        fallback = _extract_with_trafilatura(html)
+    except Exception as e:  # noqa: BLE001 - keep whatever readability found
+        log.warning("trafilatura_failed", error=str(e)[:120])
+        fallback = None
+    if visible_length(fallback) > readable_length:
         return fallback, "trafilatura"
     return readable, "readability"
 

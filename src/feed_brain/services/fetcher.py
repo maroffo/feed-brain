@@ -16,7 +16,7 @@ from feed_brain.config import Settings, get_settings
 from feed_brain.db.models import RSS_FEED_TYPE, Article, FeedSource
 from feed_brain.db.session import get_session_factory
 from feed_brain.services import http
-from feed_brain.services.extractor import extract_content
+from feed_brain.services.extractor import extract_content, visible_length
 from feed_brain.textutil import clean_text
 
 log = structlog.get_logger()
@@ -215,20 +215,27 @@ async def _fetch_single_feed(
 
 
 async def reextract_short(hours: int, min_chars: int, settings: Settings | None = None) -> int:
-    """Extract again the articles fetched in the last `hours` whose stored text is shorter
-    than `min_chars` (teasers, failed extractions). A result replaces the stored text only
-    when it is longer. Returns how many articles got longer text."""
+    """Extract again the web articles fetched in the last `hours` whose stored text is shorter
+    than `min_chars` visible characters (teasers, failed extractions). A result replaces the
+    stored text only when it has more visible text. Returns how many articles got longer text."""
     settings = settings or get_settings()
     cutoff = datetime.now(UTC) - timedelta(hours=hours)
     factory = get_session_factory()
     async with factory() as session:
-        rows = (
+        stored = (
             await session.execute(
-                select(Article.id, Article.url, func.coalesce(func.length(Article.content), 0))
+                select(Article.id, Article.url, Article.content)
                 .where(Article.fetched_at >= cutoff)
-                .where(func.coalesce(func.length(Article.content), 0) < min_chars)
+                .where(Article.url.like("http%"))  # inbox mails (mid:...) have no page to fetch
+                # raw length >= visible length: a generous prefilter, measured exactly below
+                .where(func.coalesce(func.length(Article.content), 0) < min_chars * 4)
             )
         ).all()
+    rows = [
+        (article_id, url, length)
+        for article_id, url, content in stored
+        if (length := visible_length(content)) < min_chars
+    ]
     semaphore = asyncio.Semaphore(settings.fetch_concurrency)
 
     async def _one(url: str) -> str | None:
@@ -240,12 +247,12 @@ async def reextract_short(hours: int, min_chars: int, settings: Settings | None 
     async with factory() as session:
         for (article_id, url, length), content in zip(rows, results, strict=True):
             text = clean_text(content)
-            if text and len(text) > length:
+            if text and visible_length(text) > length:
                 await session.execute(
                     update(Article).where(Article.id == article_id).values(content=text)
                 )
                 refilled += 1
-                log.info("article_reextracted", url=url, before=length, after=len(text))
+                log.info("article_reextracted", url=url, before=length, after=visible_length(text))
         await session.commit()
     log.info("reextract_done", candidates=len(rows), refilled=refilled)
     return refilled

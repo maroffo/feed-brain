@@ -267,3 +267,38 @@ async def test_reextract_refills_recent_short_articles_only(session_factory, mon
     assert contents["https://p/teaser"].startswith("testo completo")
     assert contents["https://p/full"] == "x" * 3000 and contents["https://p/old"] == "old"
     assert contents["https://p/still"] == "short"  # a shorter result never replaces the stored text
+
+
+async def test_reextract_measures_visible_text_and_skips_inbox_mails(session_factory, monkeypatch):
+    from sqlalchemy import select
+
+    from feed_brain.config import Settings
+    from feed_brain.db.models import Article
+    from feed_brain.services import fetcher
+
+    heavy_teaser = (
+        "<div>" + '<img src="https://cdn/x.jpg" alt="foto">' * 60 + "<p>Solo l'attacco.</p></div>"
+    )
+    now = datetime.now(UTC)
+    async with session_factory() as session:
+        session.add_all(
+            [
+                Article(url="https://p/heavy", title="t", content=heavy_teaser, fetched_at=now),
+                Article(url="mid:abc@mail", title="t", content="breve", fetched_at=now),
+            ]
+        )
+        await session.commit()
+    asked = []
+
+    async def fake_extract(url, settings):  # noqa: ARG001
+        asked.append(url)
+        return "testo completo " * 150  # 2250 chars of text, fewer raw chars than the teaser's HTML
+
+    monkeypatch.setattr(fetcher, "extract_content", fake_extract)
+    refilled = await fetcher.reextract_short(
+        hours=48, min_chars=1500, settings=Settings(_env_file=None)
+    )
+    async with session_factory() as session:
+        contents = {a.url: a.content for a in (await session.execute(select(Article))).scalars()}
+    assert asked == ["https://p/heavy"] and refilled == 1
+    assert contents["https://p/heavy"].startswith("testo completo")
