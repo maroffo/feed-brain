@@ -278,8 +278,10 @@ async def _analyze_leads(
     anthropic: AsyncAnthropic | None,
     gemini: BulletinLLM,
     settings: Settings,
+    semaphore: asyncio.Semaphore | None = None,
 ) -> tuple[dict[int, DeepAnalysis], dict[int, DeepAnalysis]]:
-    """Returns (all analyses by article id, the subset that is new and must be stored)."""
+    """Returns (all analyses by article id, the subset that is new and must be stored).
+    `semaphore` bounds concurrent Opus calls; generate_bulletin shares it with the essays."""
     analyses: dict[int, DeepAnalysis] = {}
     pending: list[Article] = []
     for article in leads:
@@ -292,10 +294,10 @@ async def _analyze_leads(
     if anthropic is None or not pending:
         return analyses, {}
 
-    semaphore = asyncio.Semaphore(settings.analysis_concurrency)
+    slots = semaphore or asyncio.Semaphore(settings.analysis_concurrency)
 
     async def _bounded(article: Article) -> tuple[int, DeepAnalysis | None]:
-        async with semaphore:
+        async with slots:
             return article.id, await deep_analyze(article, anthropic, gemini, settings)
 
     fresh = {
@@ -385,9 +387,10 @@ async def generate_bulletin(
         if story.lead.content_len >= settings.analysis_min_chars
     ]
     leads = [rows[i] for i in lead_ids if i in rows]
+    opus_slots = asyncio.Semaphore(settings.analysis_concurrency)  # one budget for both
     (analyses, fresh), essays = await asyncio.gather(
-        _analyze_leads(leads, anthropic, gemini, settings),
-        write_essays(top, rows, anthropic, settings),
+        _analyze_leads(leads, anthropic, gemini, settings, opus_slots),
+        write_essays(top, rows, anthropic, settings, opus_slots),
     )
 
     draft = await _write(issue_date, top, analyses, gemini)

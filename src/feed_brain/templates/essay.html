@@ -10,4 +10,4 @@
 <h2 class="s">Fonti</h2>
 {{ m.sources(story.sources) }}
 {% endblock %}
-{% block footer %}Scritto da Claude leggendo il testo completo di {{ story.essay.sources_read }} {{ "fonte" if story.essay.sources_read == 1 else "fonti" }} su {{ story.sources|length }}{% if story.essay.sources_read < story.sources|length %}; delle altre solo la sintesi{% endif %}.{% endblock %}
+{% block footer %}{{ footer }}{% endblock %}

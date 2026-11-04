@@ -479,3 +479,18 @@ def test_no_essay_link_on_the_public_page_without_links_or_in_the_vault_note():
     assert "/e/" not in render_bulletin_html(with_essay, links=_links(), public=True)
     assert "Il quadro completo" not in render_bulletin_html(with_essay)
     assert "Il quadro completo" not in render_bulletin_md(with_essay)
+
+
+def test_the_essay_footer_says_honestly_what_was_read():
+    from feed_brain.services.render import essay_footer
+
+    assert essay_footer(0, 1) == "Scritto da Claude a partire dalla sintesi della fonte."
+    assert essay_footer(0, 3) == "Scritto da Claude a partire dalle sintesi delle 3 fonti."
+    assert essay_footer(1, 1) == "Scritto da Claude leggendo il testo completo della fonte."
+    assert essay_footer(4, 4) == "Scritto da Claude leggendo il testo completo di tutte le 4 fonti."
+    assert essay_footer(1, 2) == (
+        "Scritto da Claude leggendo il testo completo di 1 fonte su 2; dell'altra solo la sintesi."
+    )
+    assert essay_footer(9, 16) == (
+        "Scritto da Claude leggendo il testo completo di 9 fonti su 16; delle altre solo la sintesi."
+    )

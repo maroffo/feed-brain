@@ -149,7 +149,7 @@ def essays(monkeypatch):
     """Opus essays are faked in every test: generate_bulletin always gets a dummy client."""
     recorder = EssayRecorder()
 
-    async def fake_write_essays(top, articles, client, settings):  # noqa: ARG001
+    async def fake_write_essays(top, articles, client, settings, semaphore=None):  # noqa: ARG001
         recorder.top, recorder.articles = list(top), dict(articles)
         return recorder.make(top) if callable(recorder.make) else {}
 
@@ -585,3 +585,45 @@ def test_issues_stored_before_essays_still_load():
     for story in raw["top_stories"]:
         del story["essay"]
     assert BulletinData.model_validate(raw).top_stories[0].essay is None
+
+
+async def test_lead_analyses_and_essays_share_one_opus_concurrency_budget(
+    session_factory, monkeypatch
+):
+    """Both run at once: with analysis_concurrency=1, never two Opus calls in flight."""
+    import asyncio
+
+    from feed_brain.config import Settings
+    from feed_brain.services import essay as essay_mod
+    from feed_brain.services.essay import EssayDraft
+
+    live = peak = 0
+
+    async def opus_call():
+        nonlocal live, peak
+        live += 1
+        peak = max(peak, live)
+        await asyncio.sleep(0.01)
+        live -= 1
+
+    async def fake_deep_analyze(article, client, gemini, settings=None):  # noqa: ARG001
+        await opus_call()
+        return ANALYSIS
+
+    async def fake_opus(*_args):
+        await opus_call()
+        return EssayDraft(paragraphs=["P."])
+
+    monkeypatch.setattr(bulletin_mod, "deep_analyze", fake_deep_analyze)
+    monkeypatch.setattr(bulletin_mod, "write_essays", essay_mod.write_essays)  # the real one
+    monkeypatch.setattr(essay_mod, "opus_structured", fake_opus)
+    await _seed(session_factory)
+    settings = Settings(_env_file=None, analysis_concurrency=1)
+
+    bulletin = await generate_bulletin(
+        ISSUE, gemini=FakeGemini(), anthropic=object(), settings=settings
+    )
+
+    data = BulletinData.model_validate_json(bulletin.content_json)
+    assert all(s.essay for s in data.top_stories)  # 2 essays + 2 analyses ran
+    assert peak == 1

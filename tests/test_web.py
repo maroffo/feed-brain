@@ -207,7 +207,7 @@ async def test_the_essay_page_shows_the_essay_and_its_sources(session_factory):
     assert "Frigoriferi &lt;b&gt;sotto&lt;/b&gt; attacco" in page.text
     assert "<p>Primo &lt;i&gt;paragrafo&lt;/i&gt;.</p>" in page.text
     assert 'href="https://g/fridges"' in page.text
-    assert "testo completo di 1 fonte su 1" in page.text
+    assert "leggendo il testo completo della fonte." in page.text
     assert "Il quadro completo · " in page.text  # the name of the link in the email
     # no-referrer: the source sites the essay links to never see the signed URL
     assert page.headers["referrer-policy"] == "no-referrer"

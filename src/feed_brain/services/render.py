@@ -175,12 +175,26 @@ def render_vote_page(
     )
 
 
+def essay_footer(read: int, total: int) -> str:
+    """How much of the sources the essay rests on, in correct Italian for every count."""
+    if read == 0:
+        what = "dalla sintesi della fonte" if total == 1 else f"dalle sintesi delle {total} fonti"
+        return f"Scritto da Claude a partire {what}."
+    if read >= total:
+        what = "della fonte" if total == 1 else f"di tutte le {total} fonti"
+        return f"Scritto da Claude leggendo il testo completo {what}."
+    noun = "fonte" if read == 1 else "fonti"
+    rest = "dell'altra solo la sintesi" if total - read == 1 else "delle altre solo la sintesi"
+    return f"Scritto da Claude leggendo il testo completo di {read} {noun} su {total}; {rest}."
+
+
 def render_essay_page(story: TopStory, issue_date: date) -> str:
     """Private page of the vote service with the essay behind a top story."""
     day = italian_date(issue_date)
     return _env.get_template("essay.html").render(
         story=story,
         section_title=SECTION_TITLES[story.section],
+        footer=essay_footer(story.essay.sources_read, len(story.sources)) if story.essay else "",
         page_title=f"{story.title} · il quadro completo",
         kicker=f"Il quadro completo · {day}",
     )

@@ -2,6 +2,7 @@
 # ABOUTME: Best effort (refusal, truncation or API error means no essay); sources are untrusted input.
 
 import asyncio
+import re
 from collections.abc import Mapping
 
 import structlog
@@ -19,6 +20,7 @@ log = structlog.get_logger()
 
 STORY_BUDGET_CHARS = 120_000  # all sources of one story together (~30k tokens)
 SOURCE_MAX_CHARS = 20_000  # one source, same cap as the deep analysis
+_SOURCE_TAG = re.compile(r"<(/?)\s*source\b", re.IGNORECASE)  # any case, opening or closing
 
 SYSTEM_PROMPT = """\
 You write the in-depth essay behind one top story of a daily Italian news bulletin. The reader \
@@ -71,10 +73,9 @@ def essay_prompt(story: Story, articles: Mapping[int, Article], min_chars: int) 
             read += 1
         else:
             body = f"(solo sintesi) {candidate.summary}"
-        body = body.replace("</source>", "</ source>")  # a source cannot close its own tag
-        blocks.append(
-            f"<source>\nTestata: {candidate.source}\nTitolo: {candidate.title}\n\n{body}\n</source>"
-        )
+        inner = f"Testata: {candidate.source}\nTitolo: {candidate.title}\n\n{body}"
+        # Nothing a feed controls (outlet, title, text) can open or close a source block.
+        blocks.append(f"<source>\n{_SOURCE_TAG.sub(r'<\1 source', inner)}\n</source>")
     return "\n\n".join(blocks), read
 
 
@@ -83,11 +84,13 @@ async def write_essays(
     articles: Mapping[int, Article],
     client: AsyncAnthropic | None,
     settings: Settings,
+    semaphore: asyncio.Semaphore | None = None,
 ) -> dict[int, StoryEssay]:
-    """One essay per top story, keyed by the story's lead article id; failures are skipped."""
+    """One essay per top story, keyed by the story's lead article id; failures are skipped.
+    `semaphore` bounds concurrent Opus calls; generate_bulletin shares it with the analyses."""
     if client is None:
         return {}
-    semaphore = asyncio.Semaphore(settings.analysis_concurrency)
+    semaphore = semaphore or asyncio.Semaphore(settings.analysis_concurrency)
 
     async def _one(story: Story) -> tuple[int, StoryEssay | None]:
         prompt, read = essay_prompt(story, articles, settings.analysis_min_chars)
