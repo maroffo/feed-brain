@@ -1,13 +1,21 @@
 # ABOUTME: Renders bulletins and weekly recaps to HTML (page + email body) and Markdown (vault note).
 # ABOUTME: Templates live in feed_brain/templates; HTML is autoescaped, Markdown is not.
 
+from collections import Counter
 from datetime import date
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from jinja2 import Environment, PackageLoader, select_autoescape
 
-from feed_brain.models import SECTION_TITLES, BulletinData, TopStory, WeeklyData, edition_for
+from feed_brain.models import (
+    SECTION_TITLES,
+    BulletinData,
+    SourceRef,
+    TopStory,
+    WeeklyData,
+    edition_for,
+)
 from feed_brain.services.bulletin import italian_date
 from feed_brain.services.feedback import StoryLinks
 
@@ -43,6 +51,16 @@ def folded(count: int) -> str:
     return "e un'altra storia" if count == 1 else f"e altre {count} storie"
 
 
+def by_outlet(refs: list[SourceRef]) -> list[tuple[str, str, int]]:
+    """Outlets in order of first appearance: name, URL of its first article, article count."""
+    first: dict[str, str] = {}
+    count: Counter[str] = Counter()
+    for ref in refs:
+        first.setdefault(ref.name, ref.url)
+        count[ref.name] += 1
+    return [(name, url, count[name]) for name, url in first.items()]
+
+
 _env = Environment(
     loader=PackageLoader("feed_brain", "templates"),
     autoescape=select_autoescape(enabled_extensions=("html",), default_for_string=False),
@@ -56,6 +74,7 @@ _env.filters["md_text"] = md_text
 _env.filters["md_url"] = md_url
 _env.filters["md_link"] = md_link
 _env.filters["folded"] = folded
+_env.filters["by_outlet"] = by_outlet
 
 
 def render_bulletin_html(

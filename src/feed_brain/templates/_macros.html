@@ -1,4 +1,4 @@
-{#- ABOUTME: Shared macros for the HTML templates: links that may have no web page, source lists, votes, essays. -#}
+{#- ABOUTME: Shared macros for the HTML templates: links that may have no web page, sources, notes, votes, essays. -#}
 {#- ABOUTME: A target that is not http(s) (newsletter digest, hostile feed URL) renders as plain text. -#}
 {% macro link(url, text, cls="") -%}
 {%- set href = url | safe_url -%}
@@ -12,6 +12,25 @@
 <div class="src">
 {%- for s in refs %}{{ link(s.url, s.name ~ ": " ~ s.title) }}{% if not loop.last %} · {% endif %}{% endfor -%}
 </div>
+{%- endmacro %}
+{% macro outlet_line(refs) -%}
+<div class="src">
+{%- for name, url, count in refs | by_outlet %}{{ link(url, name) }}{% if count > 1 %} ({{ count }}){% endif %}{% if not loop.last %} · {% endif %}{% endfor -%}
+</div>
+{%- endmacro %}
+{#- After a brief's headline, which links the lead article: the lead outlet by name, the others linked. -#}
+{% macro brief_outlets(refs) -%}
+<span class="more">
+{%- for name, url, count in refs | by_outlet %} · {% if loop.first %}{{ name }}{% else %}{{ link(url, name) }}{% endif %}{% if count > 1 %} ({{ count }}){% endif %}{% endfor -%}
+</span>
+{%- endmacro %}
+{% macro notes(analysis) -%}
+{%- if analysis and (analysis.insights or analysis.actionables) -%}
+<div class="deep">
+{% if analysis.insights %}<b>Approfondimento</b><ul>{% for i in analysis.insights %}<li>{{ i }}</li>{% endfor %}</ul>{% endif %}
+{% if analysis.actionables %}<b>Da fare</b><ul>{% for a in analysis.actionables %}<li>{{ a }}</li>{% endfor %}</ul>{% endif %}
+</div>
+{%- endif -%}
 {%- endmacro %}
 {% macro reserved_note() -%}
 <p class="muted">Contenuto per abbonati: leggilo alla fonte.</p>
@@ -29,6 +48,6 @@
 
 {% macro essay_link(links, story) -%}
 {%- if links and story.essay -%}
-<div class="src"><a href="{{ links.essay(story.sources[0].url) | safe_url }}">Il quadro completo{% if story.sources|length > 1 %}: cosa dicono le {{ story.sources|length }} fonti{% endif %} →</a></div>
+<div class="ess"><a href="{{ links.essay(story.sources[0].url) | safe_url }}">Il quadro completo{% if story.sources|length > 1 %}: cosa dicono le {{ story.sources|length }} fonti{% endif %} →</a></div>
 {%- endif -%}
 {%- endmacro %}

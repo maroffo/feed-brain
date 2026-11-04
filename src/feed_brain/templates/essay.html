@@ -1,4 +1,4 @@
-{#- ABOUTME: Private page behind a top story's essay link: lede, titled sections, things to watch, sources. -#}
+{#- ABOUTME: Private page behind a top story's essay link: lede, sections, things to watch, notes, sources. -#}
 {#- ABOUTME: Served by the vote service with no-referrer, so the source sites never see the signed URL. -#}
 {% extends "_base.html" %}
 {% import "_macros.html" as m %}
@@ -9,6 +9,7 @@ h2.essay{font-size:18px;border:0;padding:0;margin:24px 0 6px}
 .body p{font-size:17px;line-height:1.65}
 ul.watch{margin:6px 0 0 20px;padding:0;font-size:16px;line-height:1.55}
 ul.watch li{margin-bottom:4px}
+.deep{margin-top:24px}
 {% endblock %}
 {% block content %}
 <h1 class="essay">{{ story.title }}</h1>
@@ -27,6 +28,7 @@ ul.watch li{margin-bottom:4px}
 <ul class="watch">{% for item in story.essay.watch %}<li>{{ item }}</li>{% endfor %}</ul>
 {% endif %}
 </div>
+{{ m.notes(story.analysis) }}
 <h2 class="essay">Fonti</h2>
 <ul class="radar">{% for s in story.sources %}<li>{{ m.link(s.url, s.name ~ ": " ~ s.title) }}</li>{% endfor %}</ul>
 {% endblock %}
