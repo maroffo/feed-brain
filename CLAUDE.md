@@ -14,12 +14,13 @@ Python 3.13 + uv, SQLAlchemy 2 async + asyncpg, Alembic, Postgres 15, Gemini Fla
 src/feed_brain/
   __main__.py          # CLI: run, collect, bulletin, weekly, serve, sync-vault, migrate, analyze, ...
   config.py            # Pydantic Settings (env / .env)
-  models.py            # Tier, Section (12), Category (vault), TriageResult, DeepAnalysis, BulletinData, WeeklyData
+  models.py            # Tier, Section (13), EDITIONS, Category (vault), TriageResult, DeepAnalysis, BulletinData, WeeklyData
   interests.md         # interest profile injected into the triage prompt (edit freely)
+  stack.md             # reader's stack, injected into triage: decides which CVEs reach Radar minacce
   textutil.py          # clean_text: strip NUL/control chars before Postgres
   ai/gemini.py         # async structured output + retries (429/5xx, transport, bad JSON)
   ai/prompts.py        # clustering, bulletin and weekly prompts (Italian output)
-  db/models.py         # FeedSource, Article, Bulletin, WeeklyDigest, StoryVote
+  db/models.py         # FeedSource, Article, Bulletin (one per date and edition), WeeklyDigest, StoryVote
   db/session.py        # asyncpg engine (pool 2, no overflow, pre-ping)
   db/migrate.py        # programmatic Alembic; migrations in db/migrations/versions
   services/
@@ -30,7 +31,7 @@ src/feed_brain/
     ranking.py         # pure: score, lead, top stories
     analyzer.py        # Opus 5.5 (effort high, fallbacks="default"), Minions for arXiv
     essay.py           # Opus essay per top story from every source's text (budgeted, best effort)
-    bulletin.py        # generate_bulletin: idempotent per day, atomic --force
+    bulletin.py        # generate_bulletin per edition: idempotent per (day, edition), atomic --force
     weekly.py          # due_week + generate_weekly
     render.py          # Jinja HTML (email-safe) + Markdown notes; safe_url/md filters
     storage.py         # LocalStorage / GcsStorage

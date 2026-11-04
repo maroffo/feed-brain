@@ -98,12 +98,14 @@ class Article(Base):
 
 
 class Bulletin(Base):
-    """One daily issue. content_json is a self-contained BulletinData for rendering."""
+    """One issue of one edition. content_json is a self-contained BulletinData for rendering."""
 
     __tablename__ = "bulletins"
+    __table_args__ = (UniqueConstraint("issue_date", "edition", name="uq_bulletins_issue_edition"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    issue_date: Mapped[date] = mapped_column(Date, unique=True)
+    issue_date: Mapped[date] = mapped_column(Date)
+    edition: Mapped[str] = mapped_column(String(30), default="daily", server_default="daily")
     title: Mapped[str] = mapped_column(String(300))
     subtitle: Mapped[str] = mapped_column(String(500))
     editorial: Mapped[str] = mapped_column(Text)

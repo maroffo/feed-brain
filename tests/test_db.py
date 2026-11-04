@@ -65,3 +65,23 @@ async def test_folder_and_section_persist(db_session):
     article = (await db_session.execute(select(Article))).scalar_one()
     assert article.section == "security"
     assert (await db_session.get(FeedSource, source_id)).folder == "0. Security"
+
+
+async def test_one_issue_per_edition_per_day(db_session):
+    """Editions share a date; the same edition twice on one day is rejected."""
+    from datetime import date
+
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+
+    from feed_brain.db.models import Bulletin
+
+    def issue(edition: str) -> Bulletin:
+        fields = {"title": "t", "subtitle": "", "editorial": "", "content_json": "{}"}
+        return Bulletin(issue_date=date(2026, 11, 5), edition=edition, **fields)
+
+    db_session.add_all([issue("daily"), issue("engineering")])
+    await db_session.commit()
+    db_session.add(issue("engineering"))
+    with pytest.raises(IntegrityError):
+        await db_session.commit()

@@ -9,11 +9,12 @@ Cloud Scheduler 06:30 Europe/Rome
   └─ Cloud Run Job `feed-brain run`
        1. collect   OPML (GCS) → fetch + extract; newsletter inbox (SES → S3) → articles
                     → triage (Gemini Flash: tier, section, vault category)
-       2. bulletin  candidates (last 36h, high/medium, daily sections only)
+       2. editions  for the main issue, then each thematic one (Ingegneria, AI per sviluppatori,
+                    Ricerca, Radar minacce): candidates (last 36h, high/medium, the edition's sections)
                     → cluster per section (Gemini) → rank (tier + multi-source boost + confidence)
-                    → deep analysis of the first 3 of 5 top leads (Claude Opus 5.5, optional)
+                    → deep analysis of the first 3 top leads (Claude Opus 5.5, optional)
                     → an essay per top story from the text of all its sources (Opus, optional)
-                    → write (Gemini) → store → publish page + email + vault outbox
+                    → write (Gemini) → store → publish page + email + vault outbox; empty: skipped
        3. weekly    on Sunday (or catch-up Mon-Sat) from the week's bulletins
 
 Cloud Run service `feed-brain serve` (public, scales to zero)
@@ -23,11 +24,16 @@ Mac (launchd, hourly)
   └─ `feed-brain sync-vault`: vault outbox (GCS) → Obsidian topic notes + Digests/, local OPML → GCS
 ```
 
-- **Sections**: 12, derived from the OPML folders (security, threat radar, AI, tech, cloud/DevOps, software, management, research, politics, economy, culture, sport). Triage assigns them per article, using feed name and folder as a hint. The daily issue reads politics/economy first, then culture/sport, then security, AI and tech; threat radar, research, management (agile/PM), cloud/DevOps and software stay out of it, unstamped in the DB for dedicated bulletins. They reach neither the email nor the vault: Second Brain entries come only from top-story leads.
-- **Issue shape**: 'Il punto' as 3-5 key points, 5 top stories, 3 'In breve' items per section (forwarded newsletters always shown). Analyzed stories show the source's money quote; insights and to-dos only when the analysis finds something actionable for the reader. Writing is telegraphic: no moral closer, no outlet names in the prose.
+- **Sections**: 13, derived from the OPML folders (security, threat radar, AI, AI for developers, tech, cloud/DevOps, software, management, research, politics, economy, culture, sport). Triage assigns them per article, using feed name and folder as a hint. AI is split: `ai` for AI as news, `ai_dev` for coding agents, AI coding tools, MCP and context engineering.
+- **Editions**: every section belongs to exactly one edition (`EDITIONS` in `models.py`), and each edition is its own email from the same pipeline, every morning:
+  - **Bollettino** (`daily`): politics/economy, then culture/sport, then security, AI and tech; 5 top stories, an essay on each.
+  - **Ingegneria** (cloud/DevOps, software, management), **AI per sviluppatori** (`ai_dev`), **Ricerca** (papers), **Radar minacce** (single CVEs and ransomware claims): 3 top stories, an essay only for stories with at least 2 sources (single-source technical stories get the Opus notes instead).
+  - An edition with no candidate story stores nothing and sends nothing. Pages are `bulletins/<date>.html` (daily) and `bulletins/<date>-<edition>.html`; vault notes are `feed-brain <date>` and `feed-brain <date> <Edition>`. The weekly recap reads the daily edition only.
+- **Issue shape**: 'Il punto' as 3-5 key points, 5 top stories (3 in a thematic edition), 3 'In breve' items per section (forwarded newsletters always shown). Analyzed stories show the source's money quote; insights and to-dos only when the analysis finds something actionable for the reader. Writing is telegraphic: no moral closer, no outlet names in the prose.
 - **Interest profile**: `src/feed_brain/interests.md`, plain Markdown injected into the triage prompt. Edit it to change what counts as high, medium or low.
+- **Stack**: `src/feed_brain/stack.md`, the technologies the reader runs, injected into the triage prompt next to the interests. A CVE on the stack is medium (high when actively exploited); off the stack it stays low and out of the Radar minacce.
 - **Ranking**: `score = tier weight (high 2, medium 1) + source boost (2 feeds 0.5, 3 feeds 0.8, 4+ 1.0) + confidence`.
-- **Idempotency**: one bulletin per day (`--force` regenerates); each article is covered once; `published_at` / `sent_at` make job retries safe.
+- **Idempotency**: one issue per day per edition (`--force` regenerates that edition only); each article is covered once; `published_at` / `sent_at` make job retries safe.
 - **Newsletter inbox**: paid newsletters forwarded from Gmail to any address on `in.behindbars.news` land in S3 (SES receiving, eu-west-1) and become articles during `collect`. Tracking links are decoded offline and reduced to the clean post URL (they carry personal tokens); only text is stored. Forwarded newsletters are always bulletin candidates. On the public page their stories show title and link only; email and vault keep everything.
 - **Story votes**: every story of the email (top stories and 'In breve') carries vote links: 'più così · meno così' under a top story, '+ −' at the end of a brief. Each link is signed with HMAC over `issue_date`, a hash of the story's first source URL and the vote. The link opens a page of the `serve` service whose script casts the vote, so link scanners that open mail links without running JS record nothing; a `<noscript>` button covers browsers without JS. The last click wins, the page offers 'Annulla'. Votes on issues older than 30 days are refused. The public page and the vault note carry no buttons.
 - **Story essays**: Opus writes an Italian essay of about 700 words for each top story from the full text of every source in its cluster (120k characters per story, split evenly, at most 20k per source; sources without readable text go in as their summary). It covers the facts, the background, why it matters, where the sources disagree (by name) and what to watch. The essay is stored in the issue (`TopStory.essay`) and served by `serve` at a signed `/e/` link under the story in the email. The page is private because essays may draw on paid newsletters, never expires, and is sent with `Referrer-Policy: no-referrer` so source sites never see the link. Its footer says how many sources were read in full. A refused or failed essay only drops the link.
@@ -62,9 +68,9 @@ make test-e2e    # Alembic + asyncpg integration tests on the docker Postgres
 
 | Command | What it does |
 |---------|--------------|
-| `run [--dry-run] [--to EMAIL]` | Scheduled entry point: migrate, collect, bulletin, deliver, weekly if due. Non-zero exit if any step failed (the others still run) |
+| `run [--dry-run] [--to EMAIL]` | Scheduled entry point: migrate, collect, each edition (generate, deliver), weekly if due. Non-zero exit if any step failed (the others still run) |
 | `collect [--dry-run]` | Sync feeds from the GCS OPML (when `DATA_BUCKET` is set), fetch, read the newsletter inbox (when `INBOX_BUCKET` is set; `--dry-run` keeps the mails), triage |
-| `bulletin [--date] [--force] [--out]` | Generate (or reuse) the day's bulletin and render it locally |
+| `bulletin [--date] [--edition KEY] [--force] [--out]` | Generate (or reuse) the day's issue of one edition (default `daily`) and render it locally |
 | `weekly [--week YYYY-Www] [--force] [--out]` | Generate the recap for a week (default: the week that is due) |
 | `serve` | Service behind the email's vote and essay links (Cloud Run service; listens on `$PORT`) |
 | `sync-vault [--outbox DIR] [--vault DIR] [--no-opml]` | Mac side of the vault bridge |

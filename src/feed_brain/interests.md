@@ -14,6 +14,7 @@
 
 **Medium interest (tier: medium)**
 - Tech industry news with substance: regulation, antitrust, major outages, platform shifts
+- AI as news with substance: frontier models and labs, AI policy and regulation, effects on work and society
 - Python tooling, CLI tools, terminal workflows; Docker, containers, security hardening
 - Engineering leadership, hiring, team practices
 - Research papers in software engineering and AI with practical, reproducible results
@@ -21,7 +22,7 @@
 - Leisure the reader chose: long-form sport analysis (rugby, cycling, basketball, football tactics), jazz album reviews, comics
 
 **Low interest (tier: low)**
-- Single CVE entries and single ransomware victim claims, unless they hit widely used software or Italian organizations (then medium). Either way their section is threat_radar
+- Single CVE entries and single ransomware victim claims, unless a CVE hits the reader's stack (see Reader's stack: medium, high when actively exploited) or a claim hits an Italian organization (medium). Either way their section is threat_radar
 - Vendor product announcements, changelogs, Workspace feature updates, minor releases
 - Gadget reviews, deals, consumer electronics news
 - Match reports and results without analysis

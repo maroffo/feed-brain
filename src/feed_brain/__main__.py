@@ -12,6 +12,8 @@ from pathlib import Path
 import structlog
 from structlog.typing import EventDict, Processor
 
+from feed_brain.models import EDITIONS
+
 
 def _cloud_severity(_logger: object, _method: str, event_dict: EventDict) -> EventDict:
     """Cloud Logging reads the level from `severity`."""
@@ -173,27 +175,34 @@ async def _run_collect(dry_run: bool = False) -> None:
 
 
 def cmd_bulletin(args: argparse.Namespace) -> None:
-    """Generate (or reuse) the daily bulletin and render it under --out."""
-    asyncio.run(_run_bulletin(args.date, args.force, Path(args.out)))
+    """Generate (or reuse) one edition's issue (default: the main one) and render it under --out."""
+    asyncio.run(_run_bulletin(args.date, args.force, Path(args.out), args.edition))
 
 
-async def _run_bulletin(issue: str | None, force: bool, out: Path) -> None:
+async def _run_bulletin(issue: str | None, force: bool, out: Path, edition: str) -> None:
     try:
-        await _bulletin(date.fromisoformat(issue) if issue else None, force, out)
+        await _bulletin(date.fromisoformat(issue) if issue else None, force, out, edition)
     finally:
         await _shutdown()
 
 
-async def _bulletin(issue_date: date | None, force: bool, out: Path) -> None:
+async def _bulletin(issue_date: date | None, force: bool, out: Path, edition_key: str) -> None:
     from feed_brain.models import BulletinData
-    from feed_brain.services.analyzer import make_client
-    from feed_brain.services.bulletin import generate_bulletin, today_rome
+    from feed_brain.services import analyzer
+    from feed_brain.services import bulletin as bulletin_service
     from feed_brain.services.render import write_bulletin_files
 
-    issue_date = issue_date or today_rome()
-    bulletin = await generate_bulletin(issue_date, force=force, anthropic=make_client())
+    issue_date = issue_date or bulletin_service.today_rome()
+    bulletin = await bulletin_service.generate_bulletin(
+        issue_date, edition=EDITIONS[edition_key], force=force, anthropic=analyzer.make_client()
+    )
     if bulletin is None:
-        log.warning("bulletin_skipped", issue_date=str(issue_date), reason="no candidates")
+        log.warning(
+            "bulletin_skipped",
+            issue_date=str(issue_date),
+            edition=edition_key,
+            reason="no candidates",
+        )
         return
     data = BulletinData.model_validate_json(bulletin.content_json)
     html_path, md_path = write_bulletin_files(data, out)
@@ -247,7 +256,7 @@ async def _weekly(week: str | None, force: bool, out: Path) -> None:
 
 
 def cmd_run(args: argparse.Namespace) -> None:
-    """Scheduled entry point: migrate, collect, bulletin, deliver, weekly if due."""
+    """Scheduled entry point: migrate, collect, each edition (generate, deliver), weekly if due."""
     from feed_brain.db.migrate import upgrade_head
 
     upgrade_head()
@@ -446,13 +455,19 @@ def main() -> None:
 
     # bulletin
     bulletin_parser = subparsers.add_parser(
-        "bulletin", help="Generate and render the daily bulletin"
+        "bulletin", help="Generate and render one edition's issue (default: the main bulletin)"
     )
     bulletin_parser.add_argument(
         "--date", default=None, help="Issue date YYYY-MM-DD (default: today, Rome)"
     )
     bulletin_parser.add_argument(
         "--force", action="store_true", help="Regenerate an existing issue"
+    )
+    bulletin_parser.add_argument(
+        "--edition",
+        default="daily",
+        choices=sorted(EDITIONS),
+        help="Edition to build (default: daily, the main issue)",
     )
     bulletin_parser.add_argument(
         "--out", default="./site", help="Output directory (default ./site)"
@@ -468,7 +483,8 @@ def main() -> None:
 
     # run
     run_parser = subparsers.add_parser(
-        "run", help="Scheduled entry point: migrate, collect, bulletin, deliver, weekly if due"
+        "run",
+        help="Scheduled entry point: migrate, collect, each edition (generate, deliver), weekly if due",
     )
     run_parser.add_argument(
         "--dry-run",

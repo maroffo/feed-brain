@@ -9,7 +9,7 @@ from sqlalchemy import select, update
 from feed_brain.config import Settings, get_settings
 from feed_brain.db.models import Bulletin, WeeklyDigest
 from feed_brain.db.session import get_session_factory
-from feed_brain.models import BulletinData, WeeklyData
+from feed_brain.models import BulletinData, WeeklyData, edition_for
 from feed_brain.services.bulletin import italian_date
 from feed_brain.services.feedback import StoryLinks, link_secret
 from feed_brain.services.mailer import send_email
@@ -46,8 +46,8 @@ async def publish_index(site: Storage) -> None:
     async with get_session_factory()() as session:
         bulletins = (
             await session.execute(
-                select(Bulletin.issue_date, Bulletin.title)
-                .order_by(Bulletin.issue_date.desc())
+                select(Bulletin.issue_date, Bulletin.edition, Bulletin.title)
+                .order_by(Bulletin.issue_date.desc(), Bulletin.id)
                 .limit(INDEX_BULLETINS)
             )
         ).all()
@@ -90,25 +90,26 @@ async def deliver_bulletin(
     if row is None:
         raise ValueError(f"no bulletin {bulletin_id}")
     data = BulletinData.model_validate_json(row.content_json)
+    edition = edition_for(data.edition)
     html = render_bulletin_html(data, settings.site_url, links=story_links(data, settings))
     md = render_bulletin_md(data)
     day = data.issue_date.isoformat()
 
     if row.published_at is None or not record:
         page = render_bulletin_html(data, settings.site_url, public=True)
-        site.write_text(f"bulletins/{day}.html", page, HTML)
+        site.write_text(f"bulletins/{edition.stem(data.issue_date)}.html", page, HTML)
         await publish_index(site)
         if record:
             await _stamp(Bulletin, bulletin_id, published_at=datetime.now(UTC))
-        log.info("bulletin_published", issue_date=day)
+        log.info("bulletin_published", issue_date=day, edition=edition.key)
 
     # Vault before email: a mail failure must not hold back the notes.
-    queue_digest(outbox, f"feed-brain {day}", md)
+    queue_digest(outbox, edition.note_name(data.issue_date), md)
     lead_urls = {story.lead_url for story in data.top_stories if story.lead_url}
     await queue_entries(outbox, bulletin_id, lead_urls, settings, record)
 
     if send and row.sent_at is None:
-        subject = f"Bollettino del {italian_date(data.issue_date)}: {data.title}"
+        subject = f"{edition.title} del {italian_date(data.issue_date)}: {data.title}"
         await send_email(subject, html, md, to=to, settings=settings)
         if record:
             await _stamp(Bulletin, bulletin_id, sent_at=datetime.now(UTC))

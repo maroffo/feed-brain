@@ -24,9 +24,9 @@ log = structlog.get_logger()
 CONTENT_PREVIEW_CHARS = 3000
 
 
-def _load_interests() -> str:
-    """Interest profile from the packaged interests.md, without its ABOUTME header."""
-    text = files("feed_brain").joinpath("interests.md").read_text(encoding="utf-8")
+def _load_profile(name: str) -> str:
+    """A packaged reader profile (interests.md, stack.md) without its ABOUTME header."""
+    text = files("feed_brain").joinpath(name).read_text(encoding="utf-8")
     return "\n".join(
         line for line in text.splitlines() if not line.startswith("# ABOUTME:")
     ).strip()
@@ -35,7 +35,8 @@ def _load_interests() -> str:
 SECTIONS_GUIDE = """\
 - security: security news and analysis (breaches, campaigns, vulnerabilities with impact, policy)
 - threat_radar: every single ransomware victim claim and every single CVE entry, whatever the tier (ransomfeed, cvefeed feeds); analysis of a campaign or a breach goes to security
-- ai: AI, LLMs, agents, AI-assisted development, AI policy, from any feed
+- ai: AI as news, from any feed: models, companies, products, policy, effects on work and society
+- ai_dev: AI for builders: coding agents, Claude Code and other AI coding tools, agent frameworks, MCP, context engineering, prompting and evals in practice
 - tech: general technology industry news (Ars Technica, The Register, Hacker News, DDay, Macity)
 - cloud_devops: cloud platforms, DevOps, infrastructure, Google Cloud and AWS blogs
 - software: software engineering, architecture, languages, practices, engineering leadership and org design (Fowler, InfoQ, DZone)
@@ -62,7 +63,9 @@ You triage articles from the reader's RSS feeds for a daily Italian news bulleti
 For each article decide how interesting it is to the reader (tier), which bulletin \
 section it belongs to, and which knowledge-base category it maps to.
 
-{_load_interests()}
+{_load_profile("interests.md")}
+
+{_load_profile("stack.md")}
 
 ## Sections (pick exactly one)
 Use the feed name and folder as a hint, but judge the article itself: a security \

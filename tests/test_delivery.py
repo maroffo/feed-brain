@@ -17,10 +17,11 @@ SETTINGS = Settings(_env_file=None, site_url="https://site.example", digest_reci
 DAY = date(2026, 11, 2)
 
 
-def _bulletin_row() -> Bulletin:
+def _bulletin_row(edition: str = "daily", title: str = "Titolo del giorno") -> Bulletin:
     data = BulletinData(
         issue_date=DAY,
-        title="Titolo del giorno",
+        edition=edition,
+        title=title,
         subtitle="",
         editorial="Il punto.",
         top_stories=[],
@@ -29,6 +30,7 @@ def _bulletin_row() -> Bulletin:
     )
     return Bulletin(
         issue_date=DAY,
+        edition=edition,
         title=data.title,
         subtitle="",
         editorial=data.editorial,
@@ -279,3 +281,33 @@ def test_no_vote_links_with_a_blank_key():
         update={"feedback_url": "https://fb.run.app", "feedback_key": SecretStr("  ")}
     )
     assert story_links(data, blank) is None
+
+
+async def test_a_thematic_issue_has_its_own_page_subject_note_and_index_line(
+    session_factory, tmp_path, monkeypatch
+):
+    sent = Sent()
+    monkeypatch.setattr(delivery, "send_email", sent)
+    async with session_factory() as session:
+        daily, theme = _bulletin_row(), _bulletin_row("engineering", "Kubernetes e GC")
+        session.add_all([daily, theme])
+        await session.commit()
+        ids = daily.id, theme.id
+    site, outbox = LocalStorage(tmp_path / "site"), LocalStorage(tmp_path / "outbox")
+
+    for bulletin_id in ids:
+        await deliver_bulletin(
+            bulletin_id, site=site, outbox=outbox, send=True, record=True, settings=SETTINGS
+        )
+
+    page = site.read_text("bulletins/2026-11-02-engineering.html")
+    assert "Ingegneria · 2 novembre 2026" in page
+    assert site.read_text("bulletins/2026-11-02.html") is not None  # the daily page is untouched
+    assert [m[0] for m in sent.messages] == [
+        "Bollettino del 2 novembre 2026: Titolo del giorno",
+        "Ingegneria del 2 novembre 2026: Kubernetes e GC",
+    ]
+    assert outbox.read_text("vault-outbox/pending/digests/feed-brain 2026-11-02 Ingegneria.md")
+    index = site.read_text("index.html")
+    assert 'href="bulletins/2026-11-02-engineering.html"' in index
+    assert "Ingegneria: Kubernetes e GC" in index

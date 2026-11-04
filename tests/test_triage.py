@@ -212,3 +212,12 @@ async def test_article_reaches_the_model_as_delimited_untrusted_data():
     prompt = gemini.prompts[0]
     assert prompt.startswith("<article>\n") and prompt.endswith("\n</article>")
     assert "untrusted" in SYSTEM_PROMPT and "<article>" in SYSTEM_PROMPT
+
+
+def test_the_reader_stack_reaches_the_triage_prompt():
+    from feed_brain.services.triage import SYSTEM_PROMPT
+
+    assert "## Reader's stack" in SYSTEM_PROMPT
+    for tech in ("Go", "Rust", "PostgreSQL", "Kubernetes", "Terraform", "macOS", "Android"):
+        assert tech in SYSTEM_PROMPT
+    assert "ABOUTME" not in SYSTEM_PROMPT

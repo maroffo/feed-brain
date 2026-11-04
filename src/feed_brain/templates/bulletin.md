@@ -1,8 +1,9 @@
-{#- ABOUTME: Daily bulletin as an Obsidian note (frontmatter + Markdown), synced to the vault Digests folder. -#}
+{#- ABOUTME: One issue (any edition) as an Obsidian note (frontmatter + Markdown), synced to the vault Digests folder. -#}
 {#- ABOUTME: Mirrors bulletin.html content; autoescape is off for this template. -#}
 ---
 date: {{ data.issue_date.isoformat() }}
 type: bulletin
+edition: {{ data.edition }}
 source: feed-brain
 articles: {{ data.articles_count }}
 ---

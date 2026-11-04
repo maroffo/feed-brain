@@ -66,12 +66,14 @@ async def _record(day: date, key: str, vote: str, story: StorySnapshot) -> None:
                     raise
 
 
-async def _issue(day: date) -> BulletinData | None:
+async def _issues(day: date) -> list[BulletinData]:
+    """Every edition's issue of that day. A story key hashes one article URL and editions
+    cover disjoint sections, so a key matches at most one story across them."""
     async with get_session_factory()() as session:
-        content = (
+        contents = (
             await session.execute(select(Bulletin.content_json).where(Bulletin.issue_date == day))
-        ).scalar_one_or_none()
-    return BulletinData.model_validate_json(content) if content else None
+        ).scalars()
+        return [BulletinData.model_validate_json(content) for content in contents]
 
 
 async def _undo(day: date, key: str) -> None:
@@ -103,8 +105,9 @@ def create_app(settings: Settings | None = None) -> Starlette:
         if datetime.now(UTC).date() - day > max_age:
             days = settings.feedback_max_age_days
             return _page(410, f"Link scaduto: si vota sui bollettini degli ultimi {days} giorni.")
-        data = await _issue(day)
-        story = find_story(data, key) if data else None
+        story = next(
+            (found for data in await _issues(day) if (found := find_story(data, key))), None
+        )
         if story is None:
             return _page(410, "Storia non più presente: il bollettino è stato rigenerato.")
         return day, key, vote, story
@@ -151,13 +154,14 @@ def create_app(settings: Settings | None = None) -> Starlette:
             return error(404, "Link non valido.")
         if not valid_signature(secret, day, key, ESSAY, request.query_params.get("s", "")):
             return error(403, "Link non valido.")
-        data = await _issue(day)
-        story = find_top_story(data, key) if data else None
-        if data is None or story is None:
+        story = next(
+            (found for data in await _issues(day) if (found := find_top_story(data, key))), None
+        )
+        if story is None:
             return error(410, "Storia non più presente: il bollettino è stato rigenerato.")
         if story.essay is None:
             return error(404, "Nessun approfondimento per questa storia.")
-        html = render_essay_page(story, data.issue_date)
+        html = render_essay_page(story, day)
         return HTMLResponse(html, headers=HEADERS)
 
     async def health(_request: Request) -> Response:

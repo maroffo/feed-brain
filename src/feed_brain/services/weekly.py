@@ -15,6 +15,7 @@ from feed_brain.config import Settings, get_settings
 from feed_brain.db.models import Bulletin, WeeklyDigest
 from feed_brain.db.session import get_session_factory
 from feed_brain.models import (
+    DAILY_EDITION,
     BulletinData,
     BulletinRef,
     SourceRef,
@@ -114,7 +115,11 @@ async def generate_weekly(
             (
                 await session.execute(
                     select(Bulletin)
-                    .where(Bulletin.issue_date >= start, Bulletin.issue_date <= end)
+                    .where(
+                        Bulletin.issue_date >= start,
+                        Bulletin.issue_date <= end,
+                        Bulletin.edition == DAILY_EDITION,  # thematic editions are not recapped
+                    )
                     .order_by(Bulletin.issue_date)
                 )
             )

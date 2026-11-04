@@ -124,3 +124,38 @@ def test_async_engine_roundtrip_with_aware_datetimes():
     article = asyncio.run(_roundtrip())
     assert article.section == "security"
     assert article.published_date == datetime(2026, 11, 1, 8, 0, tzinfo=UTC)
+
+
+def test_0004_keeps_old_issues_as_daily_and_its_downgrade_unstamps_thematic_articles(scratch_db):
+    """Upgrade on real rows: old issues become 'daily'. Downgrade: thematic issues go, their
+    articles are unstamped (ON DELETE SET NULL), the daily issue and its articles stay."""
+    cfg = alembic_config()
+    command.upgrade(cfg, "0003")
+    engine = create_engine(scratch_db)
+    issue = (
+        "INSERT INTO bulletins (issue_date, title, subtitle, editorial, content_json, "
+        "articles_count, created_at{extra}) VALUES ('2026-11-04', 't', '', '', '{{}}', 0, now(){value}) "
+        "RETURNING id"
+    )
+    article = (
+        "INSERT INTO articles (url, title, status, fetched_at, clipping_created, bulletin_id) "
+        "VALUES (:url, 't', 'triaged', now(), false, :bulletin)"
+    )
+    with engine.begin() as conn:
+        daily = conn.execute(text(issue.format(extra="", value=""))).scalar_one()
+        conn.execute(text(article), {"url": "https://x/daily", "bulletin": daily})
+
+    command.upgrade(cfg, "0004")
+    with engine.begin() as conn:
+        assert conn.execute(text("SELECT edition FROM bulletins")).scalar_one() == "daily"
+        theme = conn.execute(
+            text(issue.format(extra=", edition", value=", 'engineering'"))
+        ).scalar_one()
+        conn.execute(text(article), {"url": "https://x/theme", "bulletin": theme})
+
+    command.downgrade(cfg, "0003")
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT id FROM bulletins")).scalars().all() == [daily]
+        stamps = dict(conn.execute(text("SELECT url, bulletin_id FROM articles")).all())
+    engine.dispose()
+    assert stamps == {"https://x/daily": daily, "https://x/theme": None}

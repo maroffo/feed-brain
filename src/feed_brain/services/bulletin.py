@@ -1,5 +1,5 @@
-# ABOUTME: Daily bulletin pipeline: candidates → per-section clusters → ranking → Opus (lead notes, essays) → Gemini writer.
-# ABOUTME: Idempotent per issue_date (force regenerates); every candidate is stamped so it is never covered twice.
+# ABOUTME: Bulletin pipeline per edition: candidates → per-section clusters → ranking → Opus (notes, essays) → writer.
+# ABOUTME: Idempotent per (issue_date, edition), force regenerates; every candidate is stamped so it is covered once.
 
 import asyncio
 import json
@@ -21,14 +21,15 @@ from feed_brain.config import Settings, get_settings
 from feed_brain.db.models import EMAIL_FEED_TYPE, Article, Bulletin, FeedSource
 from feed_brain.db.session import get_session_factory
 from feed_brain.models import (
-    DAILY_AREAS,
-    DAILY_SECTIONS,
+    DAILY_EDITION,
+    EDITIONS,
     SECTION_TITLES,
     ArticleStatus,
     BriefItem,
     BulletinData,
     BulletinDraft,
     DeepAnalysis,
+    Edition,
     Section,
     SectionBlock,
     SourceRef,
@@ -102,9 +103,9 @@ def _sources(story: Story) -> list[SourceRef]:
     return [SourceRef(name=c.source, title=c.title, url=c.url, paid=c.paid) for c in story.articles]
 
 
-def _area(section: str) -> int:
-    """Reading position of a section's area; sections outside the daily issue go last."""
-    return next((i for i, area in enumerate(DAILY_AREAS) if section in area), len(DAILY_AREAS))
+def _area(section: str, areas: tuple[tuple[Section, ...], ...]) -> int:
+    """Reading position of a section's area; sections outside the edition go last."""
+    return next((i for i, area in enumerate(areas) if section in area), len(areas))
 
 
 def shown_analysis(analysis: DeepAnalysis | None) -> DeepAnalysis | None:
@@ -127,16 +128,20 @@ def assemble(
     section_cap: int = 3,
     *,
     essays: dict[int, StoryEssay] | None = None,
+    edition: Edition | None = None,
 ) -> BulletinData:
     """Pure assembly of the issue; writer gaps fall back to cluster headline + lead summary.
 
-    Top stories arrive by importance and are shown grouped by area (DAILY_AREAS), keeping
-    the importance order inside each area; 'In breve' follows DAILY_SECTIONS.
+    Top stories arrive by importance and are shown grouped by the edition's areas, keeping
+    the importance order inside each area; 'In breve' follows the edition's sections.
     """
+    edition = edition or EDITIONS[DAILY_EDITION]
     written = {w.index: w for w in draft.top_stories} if draft else {}
     top_stories = []
     # sorted() is stable: inside an area the stories keep their rank.
-    for index, story in sorted(enumerate(top), key=lambda pair: _area(pair[1].section)):
+    for index, story in sorted(
+        enumerate(top), key=lambda pair: _area(pair[1].section, edition.areas)
+    ):
         w = written.get(index)
         top_stories.append(
             TopStory(
@@ -164,7 +169,7 @@ def assemble(
         ]
 
     sections = []
-    for section in DAILY_SECTIONS:
+    for section in edition.sections:
         stories = by_section.get(section.value)
         if not stories:
             continue
@@ -186,10 +191,12 @@ def assemble(
         )
 
     key_points = [clean_text(p).strip() for p in draft.key_points] if draft else []
+    fallback = "Il bollettino" if edition.is_daily else edition.title
     return BulletinData(
         issue_date=issue_date,
+        edition=edition.key,
         title=(clean_text(draft.title).strip() if draft else "")
-        or f"Il bollettino del {italian_date(issue_date)}",
+        or f"{fallback} del {italian_date(issue_date)}",
         key_points=[p for p in key_points if p],
         top_stories=top_stories,
         sections=sections,
@@ -198,11 +205,13 @@ def assemble(
 
 
 async def _load_candidates(
-    session: AsyncSession, window_hours: int, regenerating: int | None = None
+    session: AsyncSession,
+    window_hours: int,
+    sections: tuple[Section, ...],
+    regenerating: int | None = None,
 ) -> list[Candidate]:
-    """Unstamped recent articles of the daily sections, plus (on --force) the articles of the
-    issue being replaced. Other sections (threat radar, research, management, cloud/DevOps,
-    software) stay unstamped."""
+    """Unstamped recent articles of the edition's sections, plus (on --force) the articles of
+    the issue being replaced. Other sections stay unstamped for their own edition."""
     cutoff = datetime.now(UTC) - timedelta(hours=window_hours)
     fresh = and_(Article.bulletin_id.is_(None), Article.fetched_at >= cutoff)
     scope = or_(fresh, Article.bulletin_id == regenerating) if regenerating is not None else fresh
@@ -225,7 +234,7 @@ async def _load_candidates(
                 [ArticleStatus.TRIAGED, ArticleStatus.ANALYZED, ArticleStatus.INTEGRATED]
             ),
             scope,
-            Article.section.in_([section.value for section in DAILY_SECTIONS]),
+            Article.section.in_([section.value for section in sections]),
             or_(
                 Article.tier.in_([Tier.HIGH, Tier.MEDIUM]),
                 # Forwarded newsletters were picked by hand: the tier only ranks them.
@@ -309,8 +318,12 @@ async def _analyze_leads(
     return analyses, fresh
 
 
-def _writer_prompt(issue_date: date, top: list[Story], analyses: dict[int, DeepAnalysis]) -> str:
+def _writer_prompt(
+    issue_date: date, top: list[Story], analyses: dict[int, DeepAnalysis], edition: Edition
+) -> str:
     blocks = [f"Data: {italian_date(issue_date)}"]
+    if not edition.is_daily:
+        blocks[0] += f"\nEdizione: {edition.title} (solo storie di questo tema)"
     for index, story in enumerate(top):
         lines = [f"[{index}] Sezione: {SECTION_TITLES[Section(story.section)]}"]
         lines.append(f"Titolo di lavoro: {story.headline}")
@@ -323,13 +336,17 @@ def _writer_prompt(issue_date: date, top: list[Story], analyses: dict[int, DeepA
 
 
 async def _write(
-    issue_date: date, top: list[Story], analyses: dict[int, DeepAnalysis], gemini: BulletinLLM
+    issue_date: date,
+    top: list[Story],
+    analyses: dict[int, DeepAnalysis],
+    gemini: BulletinLLM,
+    edition: Edition,
 ) -> BulletinDraft | None:
     if not top:
         return None
     try:
         draft = await gemini.generate(
-            _writer_prompt(issue_date, top, analyses), BULLETIN_PROMPT, BulletinDraft
+            _writer_prompt(issue_date, top, analyses, edition), BULLETIN_PROMPT, BulletinDraft
         )
     except GeminiError as e:
         log.warning("bulletin_writer_failed", error=str(e))
@@ -340,28 +357,38 @@ async def _write(
 async def generate_bulletin(
     issue_date: date,
     *,
+    edition: Edition | None = None,
     force: bool = False,
     gemini: BulletinLLM | None = None,
     anthropic: AsyncAnthropic | None = None,
     settings: Settings | None = None,
 ) -> Bulletin | None:
-    """Build and store the issue for `issue_date`. Returns None when there is nothing to cover."""
+    """Build and store the edition's issue for `issue_date` (default: the main issue).
+    Returns None when there is nothing to cover: no row, so nothing is sent."""
     settings = settings or get_settings()
+    edition = edition or EDITIONS[DAILY_EDITION]
     factory = get_session_factory()
+    this_issue = (Bulletin.issue_date == issue_date, Bulletin.edition == edition.key)
 
     async with factory() as session:
-        existing = (
-            await session.execute(select(Bulletin).where(Bulletin.issue_date == issue_date))
-        ).scalar_one_or_none()
+        existing = (await session.execute(select(Bulletin).where(*this_issue))).scalar_one_or_none()
         if existing is not None and not force:
-            log.info("bulletin_exists", issue_date=str(issue_date), bulletin_id=existing.id)
+            log.info(
+                "bulletin_exists",
+                issue_date=str(issue_date),
+                edition=edition.key,
+                bulletin_id=existing.id,
+            )
             return existing
         candidates = await _load_candidates(
-            session, settings.candidate_window_hours, existing.id if existing else None
+            session,
+            settings.candidate_window_hours,
+            edition.sections,
+            existing.id if existing else None,
         )
 
     if not candidates:
-        log.warning("bulletin_no_candidates", issue_date=str(issue_date))
+        log.warning("bulletin_no_candidates", issue_date=str(issue_date), edition=edition.key)
         return existing
 
     if gemini is None:
@@ -370,7 +397,7 @@ async def generate_bulletin(
         gemini = Gemini(settings)
 
     stories = await cluster_candidates(candidates, gemini, settings.triage_concurrency)
-    top, rest = select_top(stories, settings.top_stories)
+    top, rest = select_top(stories, edition.top_stories or settings.top_stories)
 
     # Essays read every article of every top story; lead notes only the first leads.
     async with factory() as session:
@@ -390,10 +417,16 @@ async def generate_bulletin(
     opus_slots = asyncio.Semaphore(settings.analysis_concurrency)  # one budget for both
     (analyses, fresh), essays = await asyncio.gather(
         _analyze_leads(leads, anthropic, gemini, settings, opus_slots),
-        write_essays(top, rows, anthropic, settings, opus_slots),
+        write_essays(
+            [s for s in top if len(s.articles) >= edition.essay_min_sources],
+            rows,
+            anthropic,
+            settings,
+            opus_slots,
+        ),
     )
 
-    draft = await _write(issue_date, top, analyses, gemini)
+    draft = await _write(issue_date, top, analyses, gemini, edition)
     data = assemble(
         issue_date,
         draft,
@@ -403,6 +436,7 @@ async def generate_bulletin(
         len(candidates),
         settings.section_cap,
         essays=essays,
+        edition=edition,
     )
 
     async with factory() as session:
@@ -415,6 +449,7 @@ async def generate_bulletin(
             await session.execute(delete(Bulletin).where(Bulletin.id == existing.id))
         bulletin = Bulletin(
             issue_date=issue_date,
+            edition=edition.key,
             title=data.title,
             subtitle=data.subtitle,
             editorial="\n".join(data.key_points),
@@ -427,10 +462,10 @@ async def generate_bulletin(
         except IntegrityError:
             # A concurrent run stored this issue first: keep theirs.
             await session.rollback()
-            winner = (
-                await session.execute(select(Bulletin).where(Bulletin.issue_date == issue_date))
-            ).scalar_one()
-            log.warning("bulletin_concurrent_insert", issue_date=str(issue_date))
+            winner = (await session.execute(select(Bulletin).where(*this_issue))).scalar_one()
+            log.warning(
+                "bulletin_concurrent_insert", issue_date=str(issue_date), edition=edition.key
+            )
             return winner
         await session.execute(
             update(Article)
