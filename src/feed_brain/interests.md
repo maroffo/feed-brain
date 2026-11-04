@@ -14,6 +14,7 @@
 
 **Medium interest (tier: medium)**
 - Tech industry news with substance: regulation, antitrust, major outages, platform shifts
+- AI as news with substance: frontier models and labs, AI policy and regulation, effects on work and society
 - Python tooling, CLI tools, terminal workflows; Docker, containers, security hardening
 - Engineering leadership, hiring, team practices
 - Research papers in software engineering and AI with practical, reproducible results

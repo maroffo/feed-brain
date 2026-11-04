@@ -107,6 +107,8 @@ EDITIONS: dict[str, Edition] = {
     edition.key: edition
     for edition in (
         Edition(DAILY_EDITION, "Bollettino", DAILY_AREAS),
+        # management is low tier in interests.md: it reaches this edition mostly through
+        # forwarded newsletters; engineering leadership is triaged as software.
         Edition(
             "engineering",
             "Ingegneria",

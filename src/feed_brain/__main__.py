@@ -256,7 +256,7 @@ async def _weekly(week: str | None, force: bool, out: Path) -> None:
 
 
 def cmd_run(args: argparse.Namespace) -> None:
-    """Scheduled entry point: migrate, collect, bulletin, deliver, weekly if due."""
+    """Scheduled entry point: migrate, collect, each edition (generate, deliver), weekly if due."""
     from feed_brain.db.migrate import upgrade_head
 
     upgrade_head()
@@ -455,7 +455,7 @@ def main() -> None:
 
     # bulletin
     bulletin_parser = subparsers.add_parser(
-        "bulletin", help="Generate and render the daily bulletin"
+        "bulletin", help="Generate and render one edition's issue (default: the main bulletin)"
     )
     bulletin_parser.add_argument(
         "--date", default=None, help="Issue date YYYY-MM-DD (default: today, Rome)"
@@ -483,7 +483,8 @@ def main() -> None:
 
     # run
     run_parser = subparsers.add_parser(
-        "run", help="Scheduled entry point: migrate, collect, bulletin, deliver, weekly if due"
+        "run",
+        help="Scheduled entry point: migrate, collect, each edition (generate, deliver), weekly if due",
     )
     run_parser.add_argument(
         "--dry-run",

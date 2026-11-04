@@ -24,7 +24,9 @@ class SyncResult:
     failed: int = 0
 
 
-DIGEST_NAME = re.compile(r"^feed-brain [0-9A-Za-z-]+\.md$")
+# "feed-brain <date or week>", optionally followed by an edition title: words of letters
+# separated by single spaces ("feed-brain 2026-11-04 AI per sviluppatori.md").
+DIGEST_NAME = re.compile(r"^feed-brain [0-9A-Za-z-]+(?: [A-Za-z]+)*\.md$")
 
 
 def _archive(store: Storage, path: str, folder: str = PROCESSED) -> None:

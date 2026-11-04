@@ -165,3 +165,27 @@ def test_sync_vault_write_failure_keeps_object_pending(tmp_path):
 
     assert (result.failed, result.duplicates, result.appended) == (1, 0, 0)
     assert outbox.list(ENTRIES) == [f"{ENTRIES}1.json"]
+
+
+def test_every_edition_note_reaches_the_vault_and_odd_names_still_do_not(tmp_path):
+    from datetime import date
+
+    from feed_brain.models import EDITIONS
+    from feed_brain.services.outbox import queue_digest
+
+    outbox = LocalStorage(tmp_path / "outbox")
+    vault = tmp_path / "vault"
+    names = [edition.note_name(date(2026, 11, 4)) for edition in EDITIONS.values()]
+    for name in names:
+        queue_digest(outbox, name, "# x\n")
+    for odd in (
+        "feed-brain 2026-11-04  doppio",
+        "feed-brain 2026-11-04 ../x",
+        "feed-brain 2026-11-04 ",
+    ):
+        outbox.write_text(f"{DIGESTS}{odd}.md", "x", "text/markdown")
+
+    result = sync_vault(outbox, vault)
+
+    assert result.digests == len(EDITIONS) and result.rejected == 3
+    assert {p.stem for p in (vault / "Digests").iterdir()} == set(names)

@@ -31,7 +31,7 @@ src/feed_brain/
     ranking.py         # pure: score, lead, top stories
     analyzer.py        # Opus 5.5 (effort high, fallbacks="default"), Minions for arXiv
     essay.py           # Opus essay per top story from every source's text (budgeted, best effort)
-    bulletin.py        # generate_bulletin: idempotent per day, atomic --force
+    bulletin.py        # generate_bulletin per edition: idempotent per (day, edition), atomic --force
     weekly.py          # due_week + generate_weekly
     render.py          # Jinja HTML (email-safe) + Markdown notes; safe_url/md filters
     storage.py         # LocalStorage / GcsStorage
