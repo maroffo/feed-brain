@@ -30,5 +30,5 @@
 {% endfor %}</ul>
 {% endblock %}
 {% block footer %}
-{{ data.stories_count }} storie principali in {{ data.bulletins|length }} bollettini · generato da feed-brain{% if site_url %} · <a href="{{ site_url | safe_url }}">archivio</a>{% endif %}
+{{ data.stories_count }} storie principali in {{ data.bulletins|length }} bollettini · generato da feed-brain{% if site_url %} · <a href="{{ site_url | safe_url }}/index.html">archivio</a>{% endif %}
 {% endblock %}

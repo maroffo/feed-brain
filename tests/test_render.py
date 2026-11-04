@@ -419,3 +419,25 @@ def test_no_thumbs_without_vote_links_on_the_public_page_or_in_the_vault_note():
     assert "👍" not in render_bulletin_html(DATA)
     assert "👍" not in render_bulletin_html(DATA, votes=_votes(), public=True)
     assert "👍" not in render_bulletin_md(DATA)
+
+
+def test_the_archive_link_opens_the_index_page_not_the_bucket_listing():
+    from feed_brain.models import WeeklyData
+    from feed_brain.services.render import render_weekly_html
+
+    weekly = WeeklyData(
+        week_start=date(2026, 10, 26),
+        week_end=date(2026, 11, 1),
+        title="W",
+        subtitle="",
+        intro="",
+        arcs=[],
+        reflection="",
+        bulletins=[],
+        stories_count=0,
+    )
+    for html in (
+        render_bulletin_html(DATA, "https://site"),
+        render_weekly_html(weekly, "https://site"),
+    ):
+        assert '<a href="https://site/index.html">archivio</a>' in html
