@@ -49,7 +49,7 @@
 <div class="item">
 {{ m.link(item.sources[0].url, item.headline, "h") }}
 {% if item.summary and not reserved %}<span class="muted"> {{ item.summary }}</span>{% endif %}
-{#- The headline links the lead article: outlets by name only, which keeps the email small. -#}
+{#- Outlets by name only, no article titles, which keeps the email small. -#}
 {{ m.brief_outlets(item.sources) }}{{ m.brief_votes(links, item.sources[0].url) }}
 </div>
 {% endfor %}
