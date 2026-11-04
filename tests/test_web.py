@@ -90,6 +90,7 @@ async def test_opening_a_link_shows_the_story_and_records_nothing(session_factor
     assert "Frigoriferi &lt;b&gt;sotto&lt;/b&gt; attacco" in page.text
     assert 'method: "POST"' in page.text  # the page's script casts the vote
     assert '<noscript><form method="post">' in page.text  # fallback without JS
+    assert "Registrato: più così" in page.text and "👍" not in page.text  # same words as the email
     assert page.headers["cache-control"] == "no-store"
     assert page.headers["referrer-policy"] == "no-referrer"
     assert await _votes(session_factory) == []
@@ -101,6 +102,7 @@ async def test_post_records_the_vote_with_a_snapshot_and_the_last_vote_wins(sess
         first = await client.post(_link("up"))
         second = await client.post(_link("down"))
     assert first.status_code == 200 and second.status_code == 200
+    assert "Registrato: meno così" in second.text
     (vote,) = await _votes(session_factory)
     assert vote.vote == "down" and vote.issue_date == TODAY
     assert vote.story_key == story_key(LEAD) and vote.section == "security"

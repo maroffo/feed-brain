@@ -12,6 +12,7 @@ from feed_brain.models import (
     SourceRef,
     TopStory,
 )
+from feed_brain.services.feedback import VoteLinks
 from feed_brain.services.render import (
     render_bulletin_html,
     render_bulletin_md,
@@ -401,21 +402,55 @@ def test_a_single_folded_story_is_named_in_the_singular():
 
 
 def _votes():
-    from feed_brain.services.feedback import VoteLinks
-
     return VoteLinks("https://fb.run.app", b"k" * 32, DATA.issue_date)
 
 
-def test_email_carries_thumbs_on_top_stories_and_briefs():
+def test_email_carries_quiet_vote_links_on_top_stories_and_briefs():
     votes = _votes()
     html = render_bulletin_html(DATA, votes=votes)
-    for url in ("https://krebs/a", "https://onrugby/x"):
-        links = votes(url)
-        assert f'href="{links["up"]}"' in html and f'href="{links["down"]}"' in html
-    assert html.count("👍") == 2 and html.count("👎") == 2
+    top, brief = votes("https://krebs/a"), votes("https://onrugby/x")
+    # top story: a closing line in words; brief: a compact + and minus at the end of the line
+    assert f'<a href="{top["up"]}" title="Mi interessa">più così</a>' in html
+    assert f'<a href="{top["down"]}" title="Non mi interessa">meno così</a>' in html
+    assert f'<a href="{brief["up"]}" title="Più così">+</a>' in html
+    assert f'<a href="{brief["down"]}" title="Meno così">−</a>' in html
+    assert "👍" not in html and "👎" not in html
+    # the story's line comes after its notes, not in the kicker above the title
+    story = html[html.index("Breccia in Italia") :]
+    assert story.index("Verifica i backup") < story.index("più così")
 
 
-def test_no_thumbs_without_vote_links_on_the_public_page_or_in_the_vault_note():
-    assert "👍" not in render_bulletin_html(DATA)
-    assert "👍" not in render_bulletin_html(DATA, votes=_votes(), public=True)
-    assert "👍" not in render_bulletin_md(DATA)
+def test_brief_votes_end_the_text_line_even_when_sources_follow_on_their_own_line():
+    issue = _two_brief_issue(omitted=0)
+    votes = VoteLinks("https://fb.run.app", b"k" * 32, issue.issue_date)
+    html = render_bulletin_html(issue, votes=votes)
+    item = html[html.index("Secondo breve") :]
+    assert item.index(votes("https://b/1")["down"]) < item.index('<div class="src">')
+
+
+def test_no_vote_links_without_vote_links_on_the_public_page_or_in_the_vault_note():
+    assert 'class="vote' not in render_bulletin_html(DATA)
+    assert 'class="vote' not in render_bulletin_html(DATA, votes=_votes(), public=True)
+    assert "più così" not in render_bulletin_md(DATA)
+
+
+def test_the_archive_link_opens_the_index_page_not_the_bucket_listing():
+    from feed_brain.models import WeeklyData
+    from feed_brain.services.render import render_weekly_html
+
+    weekly = WeeklyData(
+        week_start=date(2026, 10, 26),
+        week_end=date(2026, 11, 1),
+        title="W",
+        subtitle="",
+        intro="",
+        arcs=[],
+        reflection="",
+        bulletins=[],
+        stories_count=0,
+    )
+    for html in (
+        render_bulletin_html(DATA, "https://site"),
+        render_weekly_html(weekly, "https://site"),
+    ):
+        assert '<a href="https://site/index.html">archivio</a>' in html

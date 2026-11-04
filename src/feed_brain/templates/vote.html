@@ -1,11 +1,11 @@
-{#- ABOUTME: Page behind a 👍/👎 link: shows the story, its script casts the vote (link scanners run no JS). -#}
+{#- ABOUTME: Page behind a vote link: shows the story, its script casts the vote (link scanners run no JS). -#}
 {#- ABOUTME: state: pending (GET), recorded or undone (POST), error; a <noscript> form is the no-JS fallback. -#}
 {% extends "_base.html" %}
 {% block content %}
 {% if headline %}<h3>{{ headline }}</h3>{% endif %}
 <p id="status">{{ message }}</p>
 {% if state == "pending" %}
-<noscript><form method="post"><button type="submit">Conferma {{ thumb }}</button></form></noscript>
+<noscript><form method="post"><button type="submit">Conferma: {{ label }}</button></form></noscript>
 <p><button id="undo" type="button" hidden>Annulla</button></p>
 <script>
 (function () {
@@ -14,7 +14,7 @@
   var here = location.pathname + location.search;  // never the #fragment
   function failed() { status.textContent = "Errore di rete, riprova"; }
   fetch(here, {method: "POST"}).then(function (r) {
-    status.textContent = r.ok ? "Registrato {{ thumb }}" : "Errore, riprova";
+    status.textContent = r.ok ? "Registrato: {{ label }}" : "Errore, riprova";
     undo.hidden = !r.ok;
   }).catch(failed);
   undo.onclick = function () {

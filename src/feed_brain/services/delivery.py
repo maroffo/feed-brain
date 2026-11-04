@@ -33,7 +33,7 @@ INDEX_WEEKLIES = 26
 
 
 def vote_links(data: BulletinData, settings: Settings) -> VoteLinks | None:
-    """Signed 👍/👎 links for the email, or None when the feedback service is not configured."""
+    """Signed vote links for the email, or None when the feedback service is not configured."""
     secret = link_secret(settings)
     if not settings.feedback_url or secret is None:
         return None

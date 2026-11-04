@@ -69,7 +69,7 @@ def render_bulletin_html(
 
     public=True is the site variant: stories backed by paid sources keep title and link only.
     votes (email only, never on the public page) maps a story's first source URL to its
-    signed 👍/👎 links.
+    signed vote links.
     """
     day = italian_date(data.issue_date)
     return _env.get_template("bulletin.html").render(
@@ -155,7 +155,7 @@ def render_index_html(bulletins: list[tuple[date, str]], weeklies: list[tuple[da
 
 
 def render_vote_page(
-    *, state: str, message: str, headline: str = "", thumb: str = "", undo_url: str = ""
+    *, state: str, message: str, headline: str = "", label: str = "", undo_url: str = ""
 ) -> str:
     """Page of the vote service: pending (its script casts the vote), recorded, undone, error."""
     return _env.get_template("vote.html").render(
@@ -164,6 +164,6 @@ def render_vote_page(
         state=state,
         message=message,
         headline=headline,
-        thumb=thumb,
+        label=label,
         undo_url=undo_url,
     )

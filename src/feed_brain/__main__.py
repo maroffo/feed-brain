@@ -59,7 +59,7 @@ def cmd_migrate(_args: argparse.Namespace) -> None:
 
 
 def cmd_serve(_args: argparse.Namespace) -> None:
-    """Run the public vote service behind the email's 👍/👎 links (Cloud Run sets PORT)."""
+    """Run the public vote service behind the email's vote links (Cloud Run sets PORT)."""
     import uvicorn
 
     from feed_brain.config import get_settings
@@ -421,7 +421,7 @@ def main() -> None:
     subparsers.add_parser("migrate", help="Apply pending database migrations")
 
     # serve
-    subparsers.add_parser("serve", help="Run the vote service behind the email's 👍/👎 links")
+    subparsers.add_parser("serve", help="Run the vote service behind the email's vote links")
 
     # fetch
     subparsers.add_parser("fetch", help="Fetch new articles from all feeds")
