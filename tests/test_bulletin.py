@@ -297,6 +297,15 @@ def test_first_sentence_does_not_stop_at_abbreviations_initials_or_numbers():
     )
     assert cut("Cresce del 3.5% il PIL. Poi altro.") == "Cresce del 3.5% il PIL."
     assert cut("Chi paga davvero?") == "Chi paga davvero?"
+    # an elided article does not hide the abbreviation ("l'on.", "dell’avv.", "l'U.S.")
+    assert cut("Parla l'on. Rossi alla Camera. Poi altro.") == "Parla l'on. Rossi alla Camera."
+    assert cut("Lo conferma l’avv. Bianchi in aula. Poi.") == "Lo conferma l’avv. Bianchi in aula."
+    assert (
+        cut("Interviene l'U.S. Navy nel Mar Rosso. Poi.") == "Interviene l'U.S. Navy nel Mar Rosso."
+    )
+    # a question or an exclamation ends the first sentence too
+    assert cut("Chi paga davvero? Le opposizioni protestano.") == "Chi paga davvero?"
+    assert cut("Basta! Lo dice il sindaco.") == "Basta!"
 
 
 def test_short_source_name():
