@@ -225,7 +225,7 @@ async def test_email_gets_vote_links_only_when_the_feedback_service_is_configure
     session_factory, tmp_path, monkeypatch
 ):
     from feed_brain.models import Section, SourceRef, TopStory
-    from feed_brain.services.feedback import VoteLinks
+    from feed_brain.services.feedback import StoryLinks
 
     sent = Sent()
     monkeypatch.setattr(delivery, "send_email", sent)
@@ -265,17 +265,17 @@ async def test_email_gets_vote_links_only_when_the_feedback_service_is_configure
             bulletin_id, site=site, outbox=outbox, send=True, record=True, settings=settings
         )
 
-    links = VoteLinks("https://fb.run.app", b"k" * 32, DAY)("https://ilpost/p")
+    links = StoryLinks("https://fb.run.app", b"k" * 32, DAY).votes("https://ilpost/p")
     assert f'href="{links["up"]}"' in sent.html[0] and f'href="{links["down"]}"' in sent.html[0]
     assert "più così" not in site.read_text("bulletins/2026-11-02.html")
     assert "più così" not in sent.html[1]
 
 
 def test_no_vote_links_with_a_blank_key():
-    from feed_brain.services.delivery import vote_links
+    from feed_brain.services.delivery import story_links
 
     data = BulletinData(issue_date=DAY, title="t", top_stories=[], sections=[], articles_count=0)
     blank = SETTINGS.model_copy(
         update={"feedback_url": "https://fb.run.app", "feedback_key": SecretStr("  ")}
     )
-    assert vote_links(data, blank) is None
+    assert story_links(data, blank) is None

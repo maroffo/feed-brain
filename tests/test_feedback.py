@@ -5,8 +5,11 @@ from datetime import date
 
 from feed_brain.models import BriefItem, BulletinData, Section, SectionBlock, SourceRef, TopStory
 from feed_brain.services.feedback import (
-    VoteLinks,
+    ESSAY,
+    VOTES,
+    StoryLinks,
     find_story,
+    find_top_story,
     link_secret,
     signature,
     story_key,
@@ -71,7 +74,7 @@ def test_signatures_are_url_safe_and_128_bits():
 
 
 def test_vote_links_point_at_the_service_with_a_valid_signature():
-    links = VoteLinks("https://fb.run.app/", SECRET, DAY)("https://g/fridges")
+    links = StoryLinks("https://fb.run.app/", SECRET, DAY).votes("https://g/fridges")
     key = story_key("https://g/fridges")
     for vote in ("up", "down"):
         prefix = f"https://fb.run.app/v/2026-11-03/{key}/{vote}?s="
@@ -102,3 +105,22 @@ def test_link_secret_needs_a_real_key():
     assert secret(SecretStr("")) is None and secret(SecretStr(" " * 40)) is None
     assert secret(SecretStr("short")) is None  # under 32 chars
     assert secret(SecretStr(" " + "k" * 32 + "\n")) == b"k" * 32
+
+
+def test_the_essay_link_has_its_own_signature_that_never_casts_a_vote():
+    links = StoryLinks("https://fb.run.app", SECRET, DAY)
+    key = story_key("https://g/fridges")
+    prefix = f"https://fb.run.app/e/2026-11-03/{key}?s="
+    essay = links.essay("https://g/fridges")
+    assert essay.startswith(prefix)
+    sig = essay.removeprefix(prefix)
+    assert valid_signature(SECRET, DAY, key, ESSAY, sig)
+    assert ESSAY not in VOTES
+    assert not any(valid_signature(SECRET, DAY, key, vote, sig) for vote in VOTES)
+
+
+def test_find_top_story_ignores_briefs():
+    assert (
+        find_top_story(ISSUE, story_key("https://g/fridges")).title == "Frigoriferi sotto attacco"
+    )
+    assert find_top_story(ISSUE, story_key("https://ilpost/m")) is None

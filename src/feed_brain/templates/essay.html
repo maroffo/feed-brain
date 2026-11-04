@@ -1,0 +1,13 @@
+{#- ABOUTME: Private page behind a top story's essay link: the Opus essay, then the sources it read. -#}
+{#- ABOUTME: Served by the vote service with no-referrer, so the source sites never see the signed URL. -#}
+{% extends "_base.html" %}
+{% import "_macros.html" as m %}
+{% block content %}
+<div class="k">{{ section_title }}{% if story.sources|length > 1 %} · {{ story.sources|length }} fonti{% endif %}</div>
+<h1>{{ story.title }}</h1>
+{% for paragraph in story.essay.paragraphs %}<p>{{ paragraph }}</p>
+{% endfor %}
+<h2 class="s">Fonti</h2>
+{{ m.sources(story.sources) }}
+{% endblock %}
+{% block footer %}{{ footer }}{% endblock %}

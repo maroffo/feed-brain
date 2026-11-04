@@ -1,15 +1,15 @@
 # ABOUTME: Renders bulletins and weekly recaps to HTML (page + email body) and Markdown (vault note).
 # ABOUTME: Templates live in feed_brain/templates; HTML is autoescaped, Markdown is not.
 
-from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from jinja2 import Environment, PackageLoader, select_autoescape
 
-from feed_brain.models import SECTION_TITLES, BulletinData, WeeklyData
+from feed_brain.models import SECTION_TITLES, BulletinData, TopStory, WeeklyData
 from feed_brain.services.bulletin import italian_date
+from feed_brain.services.feedback import StoryLinks
 
 
 def paragraphs(text: str) -> list[str]:
@@ -63,13 +63,13 @@ def render_bulletin_html(
     site_url: str | None = None,
     *,
     public: bool = False,
-    votes: Callable[[str], dict[str, str]] | None = None,
+    links: StoryLinks | None = None,
 ) -> str:
     """Single-column, inline-styled page that also works as an email body.
 
     public=True is the site variant: stories backed by paid sources keep title and link only.
-    votes (email only, never on the public page) maps a story's first source URL to its
-    signed vote links.
+    links (email only, never on the public page) gives each story its signed vote links and,
+    for a top story with an essay, the essay link.
     """
     day = italian_date(data.issue_date)
     return _env.get_template("bulletin.html").render(
@@ -79,7 +79,7 @@ def render_bulletin_html(
         kicker=f"Bollettino · {day}",
         site_url=site_url,
         public=public,
-        votes=None if public else votes,
+        links=None if public else links,
     )
 
 
@@ -155,15 +155,46 @@ def render_index_html(bulletins: list[tuple[date, str]], weeklies: list[tuple[da
 
 
 def render_vote_page(
-    *, state: str, message: str, headline: str = "", label: str = "", undo_url: str = ""
+    *,
+    state: str,
+    message: str,
+    headline: str = "",
+    label: str = "",
+    undo_url: str = "",
+    kicker: str = "feed-brain · voto",
 ) -> str:
     """Page of the vote service: pending (its script casts the vote), recorded, undone, error."""
     return _env.get_template("vote.html").render(
-        page_title="feed-brain · voto",
-        kicker="feed-brain · voto",
+        page_title=kicker,
+        kicker=kicker,
         state=state,
         message=message,
         headline=headline,
         label=label,
         undo_url=undo_url,
+    )
+
+
+def essay_footer(read: int, total: int) -> str:
+    """How much of the sources the essay rests on, in correct Italian for every count."""
+    if read == 0:
+        what = "dalla sintesi della fonte" if total == 1 else f"dalle sintesi delle {total} fonti"
+        return f"Scritto da Claude a partire {what}."
+    if read >= total:
+        what = "della fonte" if total == 1 else f"di tutte le {total} fonti"
+        return f"Scritto da Claude leggendo il testo completo {what}."
+    noun = "fonte" if read == 1 else "fonti"
+    rest = "dell'altra solo la sintesi" if total - read == 1 else "delle altre solo la sintesi"
+    return f"Scritto da Claude leggendo il testo completo di {read} {noun} su {total}; {rest}."
+
+
+def render_essay_page(story: TopStory, issue_date: date) -> str:
+    """Private page of the vote service with the essay behind a top story."""
+    day = italian_date(issue_date)
+    return _env.get_template("essay.html").render(
+        story=story,
+        section_title=SECTION_TITLES[story.section],
+        footer=essay_footer(story.essay.sources_read, len(story.sources)) if story.essay else "",
+        page_title=f"{story.title} · il quadro completo",
+        kicker=f"Il quadro completo · {day}",
     )

@@ -11,7 +11,7 @@ from feed_brain.db.models import Bulletin, WeeklyDigest
 from feed_brain.db.session import get_session_factory
 from feed_brain.models import BulletinData, WeeklyData
 from feed_brain.services.bulletin import italian_date
-from feed_brain.services.feedback import VoteLinks, link_secret
+from feed_brain.services.feedback import StoryLinks, link_secret
 from feed_brain.services.mailer import send_email
 from feed_brain.services.outbox import queue_digest, queue_entries
 from feed_brain.services.render import (
@@ -32,12 +32,13 @@ INDEX_BULLETINS = 90
 INDEX_WEEKLIES = 26
 
 
-def vote_links(data: BulletinData, settings: Settings) -> VoteLinks | None:
-    """Signed vote links for the email, or None when the feedback service is not configured."""
+def story_links(data: BulletinData, settings: Settings) -> StoryLinks | None:
+    """Signed vote and essay links for the email, or None when the feedback service is not
+    configured."""
     secret = link_secret(settings)
     if not settings.feedback_url or secret is None:
         return None
-    return VoteLinks(settings.feedback_url, secret, data.issue_date)
+    return StoryLinks(settings.feedback_url, secret, data.issue_date)
 
 
 async def publish_index(site: Storage) -> None:
@@ -89,7 +90,7 @@ async def deliver_bulletin(
     if row is None:
         raise ValueError(f"no bulletin {bulletin_id}")
     data = BulletinData.model_validate_json(row.content_json)
-    html = render_bulletin_html(data, settings.site_url, votes=vote_links(data, settings))
+    html = render_bulletin_html(data, settings.site_url, links=story_links(data, settings))
     md = render_bulletin_md(data)
     day = data.issue_date.isoformat()
 
