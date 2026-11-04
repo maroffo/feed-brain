@@ -76,6 +76,7 @@ make test-e2e    # Alembic + asyncpg integration tests on the docker Postgres
 | `sync-vault [--outbox DIR] [--vault DIR] [--no-opml]` | Mac side of the vault bridge |
 | `migrate` | Apply Alembic migrations |
 | `analyze --article-id N` | Opus deep analysis of one article |
+| `reextract [--hours 48] [--min-chars 1500]` | Extract again recent articles whose stored text is short (teasers, failed pages); longer text replaces the stored one |
 | `import-opml FILE [--sync]`, `fetch`, `triage`, `list`, `reset`, `integrate` | Maintenance |
 
 ## Configuration
@@ -125,6 +126,7 @@ The stack lives in `infra/` with its own Terraform state. Shared BehindBarsPulse
    gcloud run jobs execute feed-brain --region europe-west1 --args=migrate --wait
    gcloud run jobs execute feed-brain --region europe-west1 --wait
    ```
+   To regenerate and resend an issue: `--args=bulletin,--force,--out,/tmp/site` (add `--edition,KEY` for a thematic one), then a plain run delivers it. The image's `/app` is read-only: without `--out /tmp/site` the command stores the issue and then fails writing local files, and the job's retry regenerates it again.
 6. **Opus deep analysis** (optional): create the secret, then set `anthropic_secret_id = "feed-brain-anthropic-api-key"` in `terraform.tfvars` and apply again.
    ```bash
    printf '%s' "$ANTHROPIC_API_KEY" | gcloud secrets create feed-brain-anthropic-api-key \

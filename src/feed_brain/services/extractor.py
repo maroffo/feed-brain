@@ -83,12 +83,38 @@ def _extract_with_trafilatura(html: str) -> str | None:
     return None
 
 
+SHORT_TEXT_CHARS = 1500  # below this, readability may have kept only a teaser: try trafilatura too
+_NOT_PAGES = ("image/", "video/", "audio/", "application/octet-stream", "font/")
+
+
+def _text_length(content: str | None) -> int:
+    if not content:
+        return 0
+    return len(BeautifulSoup(content, "html.parser").get_text(" ", strip=True))
+
+
+def _best_extraction(html: str) -> tuple[str | None, str]:
+    """(content, method). Readability first; when it crashes (lxml rejects control characters)
+    or returns little text, trafilatura runs too and the longer text wins."""
+    try:
+        readable = _extract_with_readability(html)
+    except Exception as e:  # noqa: BLE001 - any parser failure falls through to trafilatura
+        log.warning("readability_failed", error=str(e)[:120])
+        readable = None
+    if _text_length(readable) >= SHORT_TEXT_CHARS:
+        return readable, "readability"
+    fallback = _extract_with_trafilatura(html)
+    if _text_length(fallback) > _text_length(readable):
+        return fallback, "trafilatura"
+    return readable, "readability"
+
+
 def extract_from_html(html: str) -> str | None:
-    """Main content of an HTML document already in hand: readability, then trafilatura.
+    """Main content of an HTML document already in hand (see _best_extraction).
 
     CPU-bound: call it from a thread inside async code.
     """
-    return _extract_with_readability(html) or _extract_with_trafilatura(html)
+    return _best_extraction(html)[0]
 
 
 async def extract_content(url: str, settings: Settings | None = None) -> str | None:
@@ -106,19 +132,17 @@ async def extract_content(url: str, settings: Settings | None = None) -> str | N
         return await extract_pdf(url, settings)
 
     try:
-        html = (await http.fetch(url, settings, kind="page")).text
+        response = await http.fetch(url, settings, kind="page")
+        content_type = str(response.headers.get("content-type", "") or "").lower()
+        if content_type.startswith(_NOT_PAGES):
+            log.warning("extraction_not_a_page", url=url, content_type=content_type[:60])
+            return None
 
-        # Try readability-lxml first (CPU-bound, offload to thread)
-        cleaned = await asyncio.to_thread(_extract_with_readability, html)
-        if cleaned:
-            log.info("content_extracted", url=url, method="readability")
-            return cleaned
-
-        # Fallback to trafilatura on same HTML (CPU-bound, offload to thread)
-        text = await asyncio.to_thread(_extract_with_trafilatura, html)
-        if text:
-            log.info("content_extracted", url=url, method="trafilatura")
-            return text
+        # CPU-bound parsing, offloaded to a thread
+        content, method = await asyncio.to_thread(_best_extraction, response.text)
+        if content:
+            log.info("content_extracted", url=url, method=method)
+            return content
 
         log.warning("extraction_failed_both", url=url)
         return None

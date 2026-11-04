@@ -82,3 +82,52 @@ async def test_extract_content_uses_the_page_user_agent():
         await extract_content("https://example.com/article", settings)
 
     assert client.call_args.kwargs["headers"] == {"User-Agent": "page-ua"}
+
+
+def test_a_short_readability_result_loses_to_a_longer_trafilatura_one(monkeypatch):
+    """Politico: readability returns the 226-char teaser, trafilatura the article."""
+    from feed_brain.services import extractor
+
+    monkeypatch.setattr(
+        extractor, "_extract_with_readability", lambda _h: "<p>" + "teaser " * 30 + "</p>"
+    )
+    monkeypatch.setattr(extractor, "_extract_with_trafilatura", lambda _h: "full text " * 500)
+    assert extractor.extract_from_html("<html/>").startswith("full text")
+
+
+def test_a_long_readability_result_is_kept_without_running_trafilatura(monkeypatch):
+    from feed_brain.services import extractor
+
+    called = []
+    monkeypatch.setattr(
+        extractor, "_extract_with_readability", lambda _h: "<p>" + "parola " * 400 + "</p>"
+    )
+    monkeypatch.setattr(extractor, "_extract_with_trafilatura", lambda _h: called.append(1) or "x")
+    assert "parola" in extractor.extract_from_html("<html/>") and called == []
+
+
+def test_a_readability_crash_falls_back_to_trafilatura(monkeypatch):
+    from feed_brain.services import extractor
+
+    def crash(_html):
+        raise ValueError("All strings must be XML compatible")
+
+    monkeypatch.setattr(extractor, "_extract_with_readability", crash)
+    monkeypatch.setattr(extractor, "_extract_with_trafilatura", lambda _h: "testo " * 100)
+    assert extractor.extract_from_html("<html/>").startswith("testo")
+
+
+async def test_extract_content_never_parses_an_image(monkeypatch):
+    import pytest
+
+    from feed_brain.services import extractor
+
+    response = MagicMock()
+    response.text = "\x89JFIF binary"
+    response.headers = {"content-type": "image/jpeg"}
+    monkeypatch.setattr(extractor.http, "fetch", AsyncMock(return_value=response))
+    monkeypatch.setattr(
+        extractor, "_extract_with_readability", lambda _h: pytest.fail("parsed an image")
+    )
+    url = "https://images.dday.it/x/crop.jpg"
+    assert await extract_content(url, Settings(_env_file=None)) is None

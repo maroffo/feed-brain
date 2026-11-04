@@ -77,6 +77,21 @@ def cmd_fetch(_args: argparse.Namespace) -> None:
     asyncio.run(_run_fetch())
 
 
+def cmd_reextract(args: argparse.Namespace) -> None:
+    """Extract again recent articles whose stored text is short (teasers, failed pages)."""
+    asyncio.run(_run_reextract(args.hours, args.min_chars))
+
+
+async def _run_reextract(hours: int, min_chars: int) -> None:
+    try:
+        from feed_brain.services import fetcher
+
+        refilled = await fetcher.reextract_short(hours=hours, min_chars=min_chars)
+        log.info("reextract_finished", refilled=refilled)
+    finally:
+        await _shutdown()
+
+
 async def _run_fetch() -> None:
     try:
         from feed_brain.services.fetcher import fetch_all_feeds
@@ -435,6 +450,14 @@ def main() -> None:
     # fetch
     subparsers.add_parser("fetch", help="Fetch new articles from all feeds")
 
+    reextract_parser = subparsers.add_parser(
+        "reextract", help="Extract again recent articles whose stored text is short"
+    )
+    reextract_parser.add_argument("--hours", type=int, default=48, help="Window (default 48)")
+    reextract_parser.add_argument(
+        "--min-chars", type=int, default=1500, help="Shorter text is extracted again (default 1500)"
+    )
+
     # triage
     subparsers.add_parser("triage", help="Triage new articles with Gemini")
 
@@ -519,6 +542,7 @@ def main() -> None:
     commands = {
         "migrate": cmd_migrate,
         "fetch": cmd_fetch,
+        "reextract": cmd_reextract,
         "triage": cmd_triage,
         "analyze": cmd_analyze,
         "integrate": cmd_integrate,
