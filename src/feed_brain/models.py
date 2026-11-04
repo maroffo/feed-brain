@@ -108,6 +108,13 @@ class SourceRef(BaseModel):
     paid: bool = False  # newsletter inbox: the public page shows title and link only
 
 
+class StoryEssay(BaseModel):
+    """Opus essay behind a top story, served privately by the vote service."""
+
+    paragraphs: list[str]
+    sources_read: int  # sources that went in with their full text (the rest: summary only)
+
+
 class TopStory(BaseModel):
     title: str
     text: str
@@ -115,6 +122,7 @@ class TopStory(BaseModel):
     sources: list[SourceRef]
     analysis: DeepAnalysis | None = None
     lead_url: str = ""  # article chosen as the story lead (vault entry candidate)
+    essay: StoryEssay | None = None
 
 
 class BriefItem(BaseModel):

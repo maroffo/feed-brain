@@ -1,5 +1,5 @@
-# ABOUTME: `feed-brain serve`: the public service behind the vote links of the daily email.
-# ABOUTME: GET shows the story and its script casts the vote (link scanners run no JS); POST records it.
+# ABOUTME: `feed-brain serve`: the public service behind the signed links of the daily email (votes, essays).
+# ABOUTME: Vote GET shows the story and its script casts the vote (scanners run no JS); essays are read-only.
 
 import json
 from collections.abc import AsyncGenerator
@@ -19,13 +19,15 @@ from feed_brain.db.models import Bulletin, StoryVote
 from feed_brain.db.session import close_db, get_session_factory
 from feed_brain.models import BulletinData
 from feed_brain.services.feedback import (
+    ESSAY,
     VOTES,
     StorySnapshot,
     find_story,
+    find_top_story,
     link_secret,
     valid_signature,
 )
-from feed_brain.services.render import render_vote_page
+from feed_brain.services.render import render_essay_page, render_vote_page
 
 log = structlog.get_logger()
 
@@ -64,6 +66,14 @@ async def _record(day: date, key: str, vote: str, story: StorySnapshot) -> None:
                     raise
 
 
+async def _issue(day: date) -> BulletinData | None:
+    async with get_session_factory()() as session:
+        content = (
+            await session.execute(select(Bulletin.content_json).where(Bulletin.issue_date == day))
+        ).scalar_one_or_none()
+    return BulletinData.model_validate_json(content) if content else None
+
+
 async def _undo(day: date, key: str) -> None:
     async with get_session_factory()() as session:
         await session.execute(
@@ -93,13 +103,8 @@ def create_app(settings: Settings | None = None) -> Starlette:
         if datetime.now(UTC).date() - day > max_age:
             days = settings.feedback_max_age_days
             return _page(410, f"Link scaduto: si vota sui bollettini degli ultimi {days} giorni.")
-        async with get_session_factory()() as session:
-            content = (
-                await session.execute(
-                    select(Bulletin.content_json).where(Bulletin.issue_date == day)
-                )
-            ).scalar_one_or_none()
-        story = find_story(BulletinData.model_validate_json(content), key) if content else None
+        data = await _issue(day)
+        story = find_story(data, key) if data else None
         if story is None:
             return _page(410, "Storia non più presente: il bollettino è stato rigenerato.")
         return day, key, vote, story
@@ -133,6 +138,28 @@ def create_app(settings: Settings | None = None) -> Starlette:
             undo_url=undo_url,
         )
 
+    async def essay_page(request: Request) -> Response:
+        """Read-only and without expiry; the signature is checked before anything is read."""
+        key = request.path_params["key"]
+
+        def error(status: int, message: str) -> HTMLResponse:
+            return _page(status, message, kicker="feed-brain · il quadro completo")
+
+        try:
+            day = date.fromisoformat(request.path_params["day"])
+        except ValueError:
+            return error(404, "Link non valido.")
+        if not valid_signature(secret, day, key, ESSAY, request.query_params.get("s", "")):
+            return error(403, "Link non valido.")
+        data = await _issue(day)
+        story = find_top_story(data, key) if data else None
+        if data is None or story is None:
+            return error(410, "Storia non più presente: il bollettino è stato rigenerato.")
+        if story.essay is None:
+            return error(404, "Nessun approfondimento per questa storia.")
+        html = render_essay_page(story, data.issue_date)
+        return HTMLResponse(html, headers=HEADERS)
+
     async def health(_request: Request) -> Response:
         return PlainTextResponse("ok", headers=HEADERS)
 
@@ -145,6 +172,7 @@ def create_app(settings: Settings | None = None) -> Starlette:
         routes=[
             Route("/health", health, methods=["GET"]),
             Route("/v/{day}/{key}/{vote}", vote_page, methods=["GET", "POST"]),
+            Route("/e/{day}/{key}", essay_page, methods=["GET"]),
         ],
         lifespan=lifespan,
     )

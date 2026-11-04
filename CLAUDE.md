@@ -29,17 +29,18 @@ src/feed_brain/
     clustering.py      # one Gemini call per section, normalize_clusters
     ranking.py         # pure: score, lead, top stories
     analyzer.py        # Opus 5.5 (effort high, fallbacks="default"), Minions for arXiv
+    essay.py           # Opus essay per top story from every source's text (budgeted, best effort)
     bulletin.py        # generate_bulletin: idempotent per day, atomic --force
     weekly.py          # due_week + generate_weekly
     render.py          # Jinja HTML (email-safe) + Markdown notes; safe_url/md filters
     storage.py         # LocalStorage / GcsStorage
-    delivery.py mailer.py outbox.py   # publish + index, SES email (with vote links), vault outbox
-    feedback.py        # pure: story_key, HMAC signature, VoteLinks, find_story
+    delivery.py mailer.py outbox.py   # publish + index, SES email (vote + essay links), vault outbox
+    feedback.py        # pure: story_key, HMAC signature (votes, ESSAY), StoryLinks, find_story
     vault_sync.py      # Mac side: outbox → vault (URL dedup), OPML push
     pipeline.py        # run_daily: isolated steps, failed steps → non-zero exit
     integrator.py      # vault entry building + append with URL dedup
-  web.py               # `serve`: Starlette vote service (GET page + JS POST, 403 on bad signature)
-  templates/           # _base, _macros, bulletin, weekly, index, vote (.html) + bulletin/weekly (.md)
+  web.py               # `serve`: votes (GET page + JS POST) and essays (/e/, read-only); 403 on bad signature
+  templates/           # _base, _macros, bulletin, weekly, index, vote, essay (.html) + bulletin/weekly (.md)
 infra/                 # Terraform: job, scheduler, buckets, DB/user, IAM; inbox.tf (SES receiving, S3, AWS role);
                        # feedback.tf (public vote service, its SA, link key secret)
 ops/launchd/           # sync-vault agent

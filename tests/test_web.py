@@ -10,8 +10,16 @@ from sqlalchemy import select
 
 from feed_brain.config import Settings
 from feed_brain.db.models import Bulletin, StoryVote
-from feed_brain.models import BriefItem, BulletinData, Section, SectionBlock, SourceRef, TopStory
-from feed_brain.services.feedback import VoteLinks, signature, story_key
+from feed_brain.models import (
+    BriefItem,
+    BulletinData,
+    Section,
+    SectionBlock,
+    SourceRef,
+    StoryEssay,
+    TopStory,
+)
+from feed_brain.services.feedback import StoryLinks, signature, story_key
 from feed_brain.web import create_app
 
 SECRET = "k" * 32
@@ -20,7 +28,7 @@ TODAY = datetime.now(UTC).date()
 LEAD = "https://g/fridges"
 
 
-def _issue(day) -> BulletinData:
+def _issue(day, essay: StoryEssay | None = None) -> BulletinData:
     return BulletinData(
         issue_date=day,
         title="t",
@@ -30,6 +38,7 @@ def _issue(day) -> BulletinData:
                 text="x",
                 section=Section.SECURITY,
                 sources=[SourceRef(name="Guardian", title="Fridges", url=LEAD)],
+                essay=essay,
             )
         ],
         sections=[
@@ -49,7 +58,7 @@ def _issue(day) -> BulletinData:
     )
 
 
-async def _seed(factory, day=TODAY) -> None:
+async def _seed(factory, day=TODAY, essay: StoryEssay | None = None) -> None:
     async with factory() as session:
         session.add(
             Bulletin(
@@ -57,7 +66,7 @@ async def _seed(factory, day=TODAY) -> None:
                 title="t",
                 subtitle="",
                 editorial="",
-                content_json=_issue(day).model_dump_json(),
+                content_json=_issue(day, essay).model_dump_json(),
                 articles_count=2,
             )
         )
@@ -69,7 +78,7 @@ def _path(link: str) -> str:
 
 
 def _link(vote: str, url: str = LEAD, day=TODAY) -> str:
-    return _path(VoteLinks("https://fb.run.app", SECRET.encode(), day)(url)[vote])
+    return _path(StoryLinks("https://fb.run.app", SECRET.encode(), day).votes(url)[vote])
 
 
 def _client() -> httpx.AsyncClient:
@@ -181,3 +190,59 @@ async def test_the_page_script_handles_network_errors_and_undoes_on_the_query_st
     assert page.text.count(".catch(") == 2
     assert "location.pathname + location.search" in page.text
     assert "location.href" not in page.text  # a #fragment would swallow '&undo=1'
+
+
+ESSAY = StoryEssay(paragraphs=["Primo <i>paragrafo</i>.", "Secondo."], sources_read=1)
+
+
+def _essay_link(url: str = LEAD, day=TODAY) -> str:
+    return _path(StoryLinks("https://fb.run.app", SECRET.encode(), day).essay(url))
+
+
+async def test_the_essay_page_shows_the_essay_and_its_sources(session_factory):
+    await _seed(session_factory, essay=ESSAY)
+    async with _client() as client:
+        page = await client.get(_essay_link())
+    assert page.status_code == 200
+    assert "Frigoriferi &lt;b&gt;sotto&lt;/b&gt; attacco" in page.text
+    assert "<p>Primo &lt;i&gt;paragrafo&lt;/i&gt;.</p>" in page.text
+    assert 'href="https://g/fridges"' in page.text
+    assert "testo completo di 1 fonte su 1" in page.text
+    assert "Il quadro completo · " in page.text  # the name of the link in the email
+    # no-referrer: the source sites the essay links to never see the signed URL
+    assert page.headers["referrer-policy"] == "no-referrer"
+    assert page.headers["cache-control"] == "no-store"
+
+
+async def test_essay_links_are_checked_like_vote_links(session_factory):
+    await _seed(session_factory, essay=ESSAY)
+    key = story_key(LEAD)
+    vote_sig = signature(SECRET.encode(), TODAY, key, "up")
+    essay_sig = _essay_link().split("?s=")[1]
+    async with _client() as client:
+        forged = await client.get(f"/e/{TODAY}/{key}?s=AAAAAAAAAAAAAAAAAAAAAA")
+        vote_sig_on_essay = await client.get(f"/e/{TODAY}/{key}?s={vote_sig}")
+        essay_sig_on_vote = await client.post(f"/v/{TODAY}/{key}/up?s={essay_sig}")
+        bad_date = await client.get(f"/e/2026-13-40/{key}?s={essay_sig}")
+        no_issue = await client.get(_essay_link(day=TODAY - timedelta(days=2)))
+        brief = await client.get(_essay_link("https://ilpost/m"))
+    assert forged.status_code == 403 and vote_sig_on_essay.status_code == 403
+    assert essay_sig_on_vote.status_code == 403
+    assert bad_date.status_code == 404
+    assert no_issue.status_code == 410 and brief.status_code == 410
+    assert await _votes(session_factory) == []
+
+
+async def test_a_top_story_without_an_essay_says_so(session_factory):
+    await _seed(session_factory)
+    async with _client() as client:
+        page = await client.get(_essay_link())
+    assert page.status_code == 404 and "Nessun approfondimento" in page.text
+
+
+async def test_essays_do_not_expire_like_votes(session_factory):
+    old = TODAY - timedelta(days=400)
+    await _seed(session_factory, old, essay=ESSAY)
+    async with _client() as client:
+        page = await client.get(_essay_link(day=old))
+    assert page.status_code == 200 and "Secondo." in page.text

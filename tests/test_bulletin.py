@@ -1,5 +1,5 @@
 # ABOUTME: Tests for daily bulletin generation: candidates, idempotency, force, analysis scope, assembly.
-# ABOUTME: Gemini (clustering + writer) and Opus (deep_analyze) are faked; DB is in-memory SQLite.
+# ABOUTME: Gemini (clustering + writer) and Opus (deep_analyze, write_essays) are faked; DB is in-memory SQLite.
 
 import dataclasses
 from datetime import UTC, date, datetime, timedelta
@@ -13,6 +13,7 @@ from feed_brain.models import (
     BulletinDraft,
     DeepAnalysis,
     Section,
+    StoryEssay,
     WrittenStory,
 )
 from feed_brain.services import bulletin as bulletin_mod
@@ -132,6 +133,28 @@ def analyzed(monkeypatch):
 
     monkeypatch.setattr(bulletin_mod, "deep_analyze", fake_deep_analyze)
     return calls
+
+
+@dataclasses.dataclass
+class EssayRecorder:
+    """What generate_bulletin handed to write_essays, and what the fake returns."""
+
+    top: list = dataclasses.field(default_factory=list)
+    articles: dict = dataclasses.field(default_factory=dict)
+    make: object = None  # top stories -> {lead article id: StoryEssay}
+
+
+@pytest.fixture(autouse=True)
+def essays(monkeypatch):
+    """Opus essays are faked in every test: generate_bulletin always gets a dummy client."""
+    recorder = EssayRecorder()
+
+    async def fake_write_essays(top, articles, client, settings):  # noqa: ARG001
+        recorder.top, recorder.articles = list(top), dict(articles)
+        return recorder.make(top) if callable(recorder.make) else {}
+
+    monkeypatch.setattr(bulletin_mod, "write_essays", fake_write_essays)
+    return recorder
 
 
 async def _seed(session_factory) -> dict[str, int]:
@@ -533,3 +556,32 @@ async def test_opus_runs_only_on_the_first_leads_with_enough_text(session_factor
     assert analyzed == [ids["first"]]
     data = BulletinData.model_validate_json(bulletin.content_json)
     assert [s.analysis is not None for s in data.top_stories] == [False, False, True]
+
+
+@pytest.mark.usefixtures("analyzed")
+async def test_essays_read_every_source_of_the_top_stories_and_land_on_their_story(
+    session_factory, essays
+):
+    ids = await _seed(session_factory)
+    essays.make = lambda top: {
+        top[0].lead.article_id: StoryEssay(paragraphs=["Uno.", "Due."], sources_read=2)
+    }
+    bulletin = await generate_bulletin(ISSUE, gemini=FakeGemini(), anthropic=object())
+    data = BulletinData.model_validate_json(bulletin.content_json)
+    # every article of every top story, not only the leads, with its text loaded
+    assert set(essays.articles) == {ids["breach-a"], ids["breach-b"], ids["politics"]}
+    assert all(a.content for a in essays.articles.values())
+    security = next(s for s in data.top_stories if s.section == Section.SECURITY)
+    politics = next(s for s in data.top_stories if s.section == Section.POLITICS)
+    assert security.essay == StoryEssay(paragraphs=["Uno.", "Due."], sources_read=2)
+    assert politics.essay is None
+
+
+def test_issues_stored_before_essays_still_load():
+    import json
+
+    data = assemble(ISSUE, None, [Story("security", [_cand(1)], "h")], [], {}, 1)
+    raw = json.loads(data.model_dump_json())
+    for story in raw["top_stories"]:
+        del story["essay"]
+    assert BulletinData.model_validate(raw).top_stories[0].essay is None

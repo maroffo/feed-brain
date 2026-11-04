@@ -12,7 +12,7 @@ from feed_brain.models import (
     SourceRef,
     TopStory,
 )
-from feed_brain.services.feedback import VoteLinks
+from feed_brain.services.feedback import StoryLinks
 from feed_brain.services.render import (
     render_bulletin_html,
     render_bulletin_md,
@@ -401,14 +401,14 @@ def test_a_single_folded_story_is_named_in_the_singular():
     assert "e altre 4 storie" in render_bulletin_md(_two_brief_issue(omitted=4))
 
 
-def _votes():
-    return VoteLinks("https://fb.run.app", b"k" * 32, DATA.issue_date)
+def _links():
+    return StoryLinks("https://fb.run.app", b"k" * 32, DATA.issue_date)
 
 
 def test_email_carries_quiet_vote_links_on_top_stories_and_briefs():
-    votes = _votes()
-    html = render_bulletin_html(DATA, votes=votes)
-    top, brief = votes("https://krebs/a"), votes("https://onrugby/x")
+    links = _links()
+    html = render_bulletin_html(DATA, links=links)
+    top, brief = links.votes("https://krebs/a"), links.votes("https://onrugby/x")
     # top story: a closing line in words; brief: a compact + and minus at the end of the line
     assert f'<a href="{top["up"]}" title="Mi interessa">più così</a>' in html
     assert f'<a href="{top["down"]}" title="Non mi interessa">meno così</a>' in html
@@ -422,15 +422,15 @@ def test_email_carries_quiet_vote_links_on_top_stories_and_briefs():
 
 def test_brief_votes_end_the_text_line_even_when_sources_follow_on_their_own_line():
     issue = _two_brief_issue(omitted=0)
-    votes = VoteLinks("https://fb.run.app", b"k" * 32, issue.issue_date)
-    html = render_bulletin_html(issue, votes=votes)
+    links = StoryLinks("https://fb.run.app", b"k" * 32, issue.issue_date)
+    html = render_bulletin_html(issue, links=links)
     item = html[html.index("Secondo breve") :]
-    assert item.index(votes("https://b/1")["down"]) < item.index('<div class="src">')
+    assert item.index(links.votes("https://b/1")["down"]) < item.index('<div class="src">')
 
 
 def test_no_vote_links_without_vote_links_on_the_public_page_or_in_the_vault_note():
     assert 'class="vote' not in render_bulletin_html(DATA)
-    assert 'class="vote' not in render_bulletin_html(DATA, votes=_votes(), public=True)
+    assert 'class="vote' not in render_bulletin_html(DATA, links=_links(), public=True)
     assert "più così" not in render_bulletin_md(DATA)
 
 
@@ -454,3 +454,28 @@ def test_the_archive_link_opens_the_index_page_not_the_bucket_listing():
         render_weekly_html(weekly, "https://site"),
     ):
         assert '<a href="https://site/index.html">archivio</a>' in html
+
+
+def _with_essay(data: BulletinData) -> BulletinData:
+    from feed_brain.models import StoryEssay
+
+    story = data.top_stories[0].model_copy(
+        update={"essay": StoryEssay(paragraphs=["Uno."], sources_read=2)}
+    )
+    return data.model_copy(update={"top_stories": [story]})
+
+
+def test_the_email_links_the_essay_of_a_top_story_that_has_one():
+    links = _links()
+    html = render_bulletin_html(_with_essay(DATA), links=links)
+    assert f'href="{links.essay("https://krebs/a")}"' in html
+    assert "Il quadro completo: cosa dicono le 2 fonti" in html
+    # no essay, no link
+    assert "/e/" not in render_bulletin_html(DATA, links=links)
+
+
+def test_no_essay_link_on_the_public_page_without_links_or_in_the_vault_note():
+    with_essay = _with_essay(DATA)
+    assert "/e/" not in render_bulletin_html(with_essay, links=_links(), public=True)
+    assert "Il quadro completo" not in render_bulletin_html(with_essay)
+    assert "Il quadro completo" not in render_bulletin_md(with_essay)

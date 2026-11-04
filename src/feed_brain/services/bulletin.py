@@ -1,4 +1,4 @@
-# ABOUTME: Daily bulletin pipeline: candidates → per-section clusters → ranking → Opus on top leads → Gemini writer.
+# ABOUTME: Daily bulletin pipeline: candidates → per-section clusters → ranking → Opus (lead notes, essays) → Gemini writer.
 # ABOUTME: Idempotent per issue_date (force regenerates); every candidate is stamped so it is never covered twice.
 
 import asyncio
@@ -32,11 +32,13 @@ from feed_brain.models import (
     Section,
     SectionBlock,
     SourceRef,
+    StoryEssay,
     Tier,
     TopStory,
 )
 from feed_brain.services.analyzer import deep_analyze
 from feed_brain.services.clustering import cluster_candidates
+from feed_brain.services.essay import write_essays
 from feed_brain.services.ranking import Candidate, Story, select_top
 from feed_brain.textutil import clean_text
 
@@ -123,6 +125,8 @@ def assemble(
     analyses: dict[int, DeepAnalysis],
     articles_count: int,
     section_cap: int = 3,
+    *,
+    essays: dict[int, StoryEssay] | None = None,
 ) -> BulletinData:
     """Pure assembly of the issue; writer gaps fall back to cluster headline + lead summary.
 
@@ -142,6 +146,7 @@ def assemble(
                 sources=_sources(story),
                 analysis=shown_analysis(analyses.get(story.lead.article_id)),
                 lead_url=story.lead.url,
+                essay=(essays or {}).get(story.lead.article_id),
             )
         )
 
@@ -365,19 +370,37 @@ async def generate_bulletin(
     stories = await cluster_candidates(candidates, gemini, settings.triage_concurrency)
     top, rest = select_top(stories, settings.top_stories)
 
+    # Essays read every article of every top story; lead notes only the first leads.
     async with factory() as session:
-        lead_ids = [
-            story.lead.article_id
-            for story in top[: settings.analysis_top_n]
-            if story.lead.content_len >= settings.analysis_min_chars
-        ]
-        leads = list(
-            (await session.execute(select(Article).where(Article.id.in_(lead_ids)))).scalars()
-        )
-    analyses, fresh = await _analyze_leads(leads, anthropic, gemini, settings)
+        top_ids = [c.article_id for story in top for c in story.articles]
+        rows = {
+            a.id: a
+            for a in (
+                await session.execute(select(Article).where(Article.id.in_(top_ids)))
+            ).scalars()
+        }
+    lead_ids = [
+        story.lead.article_id
+        for story in top[: settings.analysis_top_n]
+        if story.lead.content_len >= settings.analysis_min_chars
+    ]
+    leads = [rows[i] for i in lead_ids if i in rows]
+    (analyses, fresh), essays = await asyncio.gather(
+        _analyze_leads(leads, anthropic, gemini, settings),
+        write_essays(top, rows, anthropic, settings),
+    )
 
     draft = await _write(issue_date, top, analyses, gemini)
-    data = assemble(issue_date, draft, top, rest, analyses, len(candidates), settings.section_cap)
+    data = assemble(
+        issue_date,
+        draft,
+        top,
+        rest,
+        analyses,
+        len(candidates),
+        settings.section_cap,
+        essays=essays,
+    )
 
     async with factory() as session:
         # Replace the old issue in the same transaction as the new one: a failed

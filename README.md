@@ -12,11 +12,12 @@ Cloud Scheduler 06:30 Europe/Rome
        2. bulletin  candidates (last 36h, high/medium, daily sections only)
                     → cluster per section (Gemini) → rank (tier + multi-source boost + confidence)
                     → deep analysis of the first 3 of 5 top leads (Claude Opus 5.5, optional)
+                    → an essay per top story from the text of all its sources (Opus, optional)
                     → write (Gemini) → store → publish page + email + vault outbox
        3. weekly    on Sunday (or catch-up Mon-Sat) from the week's bulletins
 
 Cloud Run service `feed-brain serve` (public, scales to zero)
-  └─ vote links of the email → story_votes
+  └─ vote links of the email → story_votes; essay links → private essay page (read-only)
 
 Mac (launchd, hourly)
   └─ `feed-brain sync-vault`: vault outbox (GCS) → Obsidian topic notes + Digests/, local OPML → GCS
@@ -28,7 +29,8 @@ Mac (launchd, hourly)
 - **Ranking**: `score = tier weight (high 2, medium 1) + source boost (2 feeds 0.5, 3 feeds 0.8, 4+ 1.0) + confidence`.
 - **Idempotency**: one bulletin per day (`--force` regenerates); each article is covered once; `published_at` / `sent_at` make job retries safe.
 - **Newsletter inbox**: paid newsletters forwarded from Gmail to any address on `in.behindbars.news` land in S3 (SES receiving, eu-west-1) and become articles during `collect`. Tracking links are decoded offline and reduced to the clean post URL (they carry personal tokens); only text is stored. Forwarded newsletters are always bulletin candidates. On the public page their stories show title and link only; email and vault keep everything.
-- **Story votes**: every story of the email (top stories and 'In breve') carries vote links signed with HMAC ('più così · meno così' under a top story, '+ −' at the end of a brief) (`issue_date`, a hash of the story's first source URL, the vote). The link opens a page of the `serve` service whose script casts the vote, so link scanners that open mail links without running JS record nothing; a `<noscript>` button covers browsers without JS. The last click wins, the page offers 'Annulla'. Votes on issues older than 30 days are refused. The public page and the vault note carry no buttons.
+- **Story votes**: every story of the email (top stories and 'In breve') carries vote links: 'più così · meno così' under a top story, '+ −' at the end of a brief. Each link is signed with HMAC over `issue_date`, a hash of the story's first source URL and the vote. The link opens a page of the `serve` service whose script casts the vote, so link scanners that open mail links without running JS record nothing; a `<noscript>` button covers browsers without JS. The last click wins, the page offers 'Annulla'. Votes on issues older than 30 days are refused. The public page and the vault note carry no buttons.
+- **Story essays**: Opus writes an Italian essay of about 700 words for each top story from the full text of every source in its cluster (120k characters per story, split evenly, at most 20k per source; sources without readable text go in as their summary). It covers the facts, the background, why it matters, where the sources disagree (by name) and what to watch. The essay is stored in the issue (`TopStory.essay`) and served by `serve` at a signed `/e/` link under the story in the email. The page is private because essays may draw on paid newsletters, never expires, and is sent with `Referrer-Policy: no-referrer` so source sites never see the link. Its footer says how many sources were read in full. A refused or failed essay only drops the link.
 - **Vault**: the bulletin and recap notes go to `Digests/`; the leads of the top stories (high tier, confidence ≥ 0.8) are appended to the Second Brain topic notes, once per URL.
 
 ## Stack
@@ -64,7 +66,7 @@ make test-e2e    # Alembic + asyncpg integration tests on the docker Postgres
 | `collect [--dry-run]` | Sync feeds from the GCS OPML (when `DATA_BUCKET` is set), fetch, read the newsletter inbox (when `INBOX_BUCKET` is set; `--dry-run` keeps the mails), triage |
 | `bulletin [--date] [--force] [--out]` | Generate (or reuse) the day's bulletin and render it locally |
 | `weekly [--week YYYY-Www] [--force] [--out]` | Generate the recap for a week (default: the week that is due) |
-| `serve` | Vote service behind the email's vote links (Cloud Run service; listens on `$PORT`) |
+| `serve` | Service behind the email's vote and essay links (Cloud Run service; listens on `$PORT`) |
 | `sync-vault [--outbox DIR] [--vault DIR] [--no-opml]` | Mac side of the vault bridge |
 | `migrate` | Apply Alembic migrations |
 | `analyze --article-id N` | Opus deep analysis of one article |

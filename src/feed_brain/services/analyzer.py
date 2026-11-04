@@ -113,7 +113,7 @@ def make_client(settings: Settings | None = None) -> AsyncAnthropic | None:
     return AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value())
 
 
-async def _opus[T: BaseModel](
+async def opus_structured[T: BaseModel](
     client: AsyncAnthropic, settings: Settings, system: str, user: str, schema: type[T], title: str
 ) -> T | None:
     """One structured Opus call. Returns None on refusal, truncation or API error."""
@@ -168,7 +168,9 @@ async def analyze_article(
         f"Content:\n{(article.content or '')[:ANALYSIS_CONTENT_CHARS]}"
         "\n</article>"
     )
-    return _clean(await _opus(client, settings, SYSTEM_PROMPT, user, DeepAnalysis, article.title))
+    return _clean(
+        await opus_structured(client, settings, SYSTEM_PROMPT, user, DeepAnalysis, article.title)
+    )
 
 
 async def analyze_article_minions(
@@ -178,7 +180,7 @@ async def analyze_article_minions(
     settings = settings or get_settings()
     content = (article.content or "")[:PAPER_CONTENT_CHARS]
 
-    decomposed = await _opus(
+    decomposed = await opus_structured(
         client,
         settings,
         DECOMPOSE_PROMPT,
@@ -203,7 +205,7 @@ async def analyze_article_minions(
         qa_pairs.append((question, answer))
 
     qa_text = "\n\n".join(f"Q: {q}\nA: {a}" for q, a in qa_pairs)
-    synthesized = await _opus(
+    synthesized = await opus_structured(
         client,
         settings,
         SYNTHESIZE_PROMPT,
