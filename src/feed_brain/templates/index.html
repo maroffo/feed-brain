@@ -1,4 +1,4 @@
-{#- ABOUTME: Archive page of the public site: latest weekly recaps and daily bulletins, newest first. -#}
+{#- ABOUTME: Archive page of the public site: latest weekly recaps and issues of every edition, newest first. -#}
 {#- ABOUTME: Links are relative so the page works from any bucket URL or a local ./site folder. -#}
 {% extends "_base.html" %}
 {% block content %}
@@ -12,7 +12,7 @@
 {% endif %}
 <h2>Bollettini</h2>
 <ul class="radar">
-{% for b in bulletins %}<li><a href="bulletins/{{ b.issue_date.isoformat() }}.html">{{ b.issue_date.isoformat() }}: {{ b.title }}</a></li>
+{% for b in bulletins %}<li><a href="bulletins/{{ b.stem }}.html">{{ b.label }}: {{ b.title }}</a></li>
 {% endfor %}</ul>
 {% endblock %}
 {% block footer %}generato da feed-brain{% endblock %}

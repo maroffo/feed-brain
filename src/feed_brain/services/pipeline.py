@@ -1,4 +1,4 @@
-# ABOUTME: Scheduled daily run: collect (RSS + newsletter inbox) → bulletin → deliver → weekly if due.
+# ABOUTME: Scheduled daily run: collect (RSS + newsletter inbox) → each edition (generate, deliver) → weekly if due.
 # ABOUTME: Steps are isolated (one failure does not skip the rest); returns failed step names for the exit code.
 
 import asyncio
@@ -11,6 +11,7 @@ import structlog
 
 from feed_brain.config import Settings
 from feed_brain.db.session import get_session_factory
+from feed_brain.models import EDITIONS
 from feed_brain.services.analyzer import make_client
 from feed_brain.services.bulletin import generate_bulletin
 from feed_brain.services.delivery import deliver_bulletin, deliver_weekly
@@ -86,20 +87,27 @@ async def run_daily(*, today: date, dry_run: bool, to: str | None, settings: Set
     send, record = not dry_run, not dry_run
     await step("collect", lambda: collect(opml_store, settings, dry_run=dry_run))
 
-    bulletin = await step("bulletin", lambda: generate_bulletin(today, anthropic=make_client()))
-    if bulletin is not None:
-        await step(
-            "deliver_bulletin",
-            lambda: deliver_bulletin(
-                bulletin.id,
-                site=site,
-                outbox=outbox,
-                send=send,
-                record=record,
-                to=to,
-                settings=settings,
-            ),
+    # The main issue first, then each thematic edition; an empty edition sends nothing.
+    anthropic = make_client()
+    for edition in EDITIONS.values():
+        suffix = "" if edition.is_daily else f":{edition.key}"
+        bulletin = await step(
+            f"bulletin{suffix}",
+            lambda e=edition: generate_bulletin(today, edition=e, anthropic=anthropic),
         )
+        if bulletin is not None:
+            await step(
+                f"deliver_bulletin{suffix}",
+                lambda b=bulletin: deliver_bulletin(
+                    b.id,
+                    site=site,
+                    outbox=outbox,
+                    send=send,
+                    record=record,
+                    to=to,
+                    settings=settings,
+                ),
+            )
 
     monday = week_start(today)
     existing = await step(

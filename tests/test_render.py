@@ -494,3 +494,11 @@ def test_the_essay_footer_says_honestly_what_was_read():
     assert essay_footer(9, 16) == (
         "Scritto da Claude leggendo il testo completo di 9 fonti su 16; delle altre solo la sintesi."
     )
+
+
+def test_the_vault_note_and_page_name_their_edition():
+    theme = DATA.model_copy(update={"edition": "engineering"})
+    assert "\nedition: engineering\n" in render_bulletin_md(theme)
+    assert "\nedition: daily\n" in render_bulletin_md(DATA)
+    assert "Ingegneria · 2 novembre 2026" in render_bulletin_html(theme)
+    assert "Bollettino · 2 novembre 2026" in render_bulletin_html(DATA)

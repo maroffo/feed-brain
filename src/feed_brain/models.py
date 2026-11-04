@@ -1,6 +1,7 @@
 # ABOUTME: Pydantic schemas for data validation and serialization.
-# ABOUTME: Defines tiers, bulletin sections, vault categories, triage and deep-analysis outputs.
+# ABOUTME: Defines tiers, bulletin sections and editions, vault categories, triage and deep-analysis outputs.
 
+from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
 
@@ -28,13 +29,14 @@ class Category(StrEnum):
 class Section(StrEnum):
     """Bulletin sections, derived from the OPML folders (plan Appendix A).
 
-    THREAT_RADAR, RESEARCH, MANAGEMENT, CLOUD_DEVOPS and SOFTWARE are still assigned by triage
-    but stay out of the daily issue (see DAILY_AREAS); stored issues may still carry them.
+    The main issue carries DAILY_AREAS; every other section has its thematic edition
+    (EDITIONS). Each section belongs to exactly one edition.
     """
 
     SECURITY = "security"
     THREAT_RADAR = "threat_radar"
     AI = "ai"
+    AI_DEV = "ai_dev"
     TECH = "tech"
     CLOUD_DEVOPS = "cloud_devops"
     SOFTWARE = "software"
@@ -50,6 +52,7 @@ SECTION_TITLES: dict[Section, str] = {
     Section.SECURITY: "Sicurezza",
     Section.THREAT_RADAR: "Radar minacce",
     Section.AI: "AI e agenti",
+    Section.AI_DEV: "AI per sviluppatori",
     Section.TECH: "Tecnologia",
     Section.CLOUD_DEVOPS: "Cloud e DevOps",
     Section.SOFTWARE: "Ingegneria del software",
@@ -69,6 +72,70 @@ DAILY_AREAS: tuple[tuple[Section, ...], ...] = (
     (Section.SECURITY, Section.AI, Section.TECH),
 )
 DAILY_SECTIONS: tuple[Section, ...] = tuple(section for area in DAILY_AREAS for section in area)
+
+
+@dataclass(frozen=True)
+class Edition:
+    """One email of the morning: the main issue or a thematic one, built by the same pipeline."""
+
+    key: str
+    title: str  # kicker, subject and page title
+    areas: tuple[tuple[Section, ...], ...]  # reading order: top stories by area, briefs by section
+    top_stories: int | None = None  # None: settings.top_stories
+    essay_min_sources: int = 1  # single-source technical stories get the notes, not an essay
+
+    @property
+    def sections(self) -> tuple[Section, ...]:
+        return tuple(section for area in self.areas for section in area)
+
+    @property
+    def is_daily(self) -> bool:
+        return self.key == DAILY_EDITION
+
+    def stem(self, day: date) -> str:
+        """Page and file name: the date for the main issue, date-key for a thematic one."""
+        return day.isoformat() if self.is_daily else f"{day.isoformat()}-{self.key}"
+
+    def note_name(self, day: date) -> str:
+        """Vault note name in Digests/."""
+        base = f"feed-brain {day.isoformat()}"
+        return base if self.is_daily else f"{base} {self.title}"
+
+
+DAILY_EDITION = "daily"
+EDITIONS: dict[str, Edition] = {
+    edition.key: edition
+    for edition in (
+        Edition(DAILY_EDITION, "Bollettino", DAILY_AREAS),
+        Edition(
+            "engineering",
+            "Ingegneria",
+            ((Section.CLOUD_DEVOPS, Section.SOFTWARE, Section.MANAGEMENT),),
+            top_stories=3,
+            essay_min_sources=2,
+        ),
+        Edition(
+            "ai_dev",
+            "AI per sviluppatori",
+            ((Section.AI_DEV,),),
+            top_stories=3,
+            essay_min_sources=2,
+        ),
+        Edition("research", "Ricerca", ((Section.RESEARCH,),), top_stories=3, essay_min_sources=2),
+        Edition(
+            "threat_radar",
+            "Radar minacce",
+            ((Section.THREAT_RADAR,),),
+            top_stories=3,
+            essay_min_sources=2,
+        ),
+    )
+}
+
+
+def edition_for(key: str) -> Edition:
+    """The edition of a stored issue; an unknown key (edition since removed) reads as daily."""
+    return EDITIONS.get(key, EDITIONS[DAILY_EDITION])
 
 
 class ArticleStatus(StrEnum):
@@ -139,9 +206,10 @@ class SectionBlock(BaseModel):
 
 
 class BulletinData(BaseModel):
-    """Self-contained daily issue: everything render and weekly need, no DB joins."""
+    """Self-contained issue of one edition: everything render and weekly need, no DB joins."""
 
     issue_date: date
+    edition: str = DAILY_EDITION  # issues stored before editions are all daily
     title: str
     key_points: list[str] = Field(default_factory=list)  # 'Il punto': one line per fact
     top_stories: list[TopStory]

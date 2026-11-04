@@ -18,9 +18,12 @@ def calls(monkeypatch):
     async def collect(opml_store, settings, *, dry_run=False):  # noqa: ARG001
         log.append(("collect", opml_store, dry_run))
 
-    async def generate_bulletin(issue_date, anthropic=None):  # noqa: ARG001
-        log.append(("bulletin", issue_date))
-        return SimpleNamespace(id=7)
+    issue_ids = {"daily": 7, "engineering": 8, "ai_dev": None, "research": 9, "threat_radar": 10}
+
+    async def generate_bulletin(issue_date, *, edition, anthropic=None):  # noqa: ARG001
+        log.append(("bulletin", issue_date, edition.key))
+        issue_id = issue_ids[edition.key]  # None: an edition with nothing to say
+        return None if issue_id is None else SimpleNamespace(id=issue_id)
 
     async def deliver_bulletin(bulletin_id, *, site, outbox, send, record, to, settings):  # noqa: ARG001
         log.append(("deliver_bulletin", bulletin_id, type(site).__name__, send, record, to))
@@ -54,10 +57,18 @@ async def test_dry_run_on_sunday_runs_everything_locally(calls, tmp_path, monkey
         today=date(2026, 11, 1), dry_run=True, to=None, settings=Settings(_env_file=None)
     )
     assert errors == []
+    day = date(2026, 11, 1)
     assert calls == [
         ("collect", None, True),
-        ("bulletin", date(2026, 11, 1)),
+        ("bulletin", day, "daily"),
         ("deliver_bulletin", 7, "LocalStorage", False, False, None),
+        ("bulletin", day, "engineering"),
+        ("deliver_bulletin", 8, "LocalStorage", False, False, None),
+        ("bulletin", day, "ai_dev"),  # empty: nothing delivered
+        ("bulletin", day, "research"),
+        ("deliver_bulletin", 9, "LocalStorage", False, False, None),
+        ("bulletin", day, "threat_radar"),
+        ("deliver_bulletin", 10, "LocalStorage", False, False, None),
         ("weekly", date(2026, 10, 26)),
         ("deliver_weekly", 3, False),
     ]
@@ -136,3 +147,21 @@ async def test_inbox_failure_still_triages_then_fails_the_step(collect_steps, mo
     with pytest.raises(RuntimeError, match="S3 down"):
         await pipeline.collect(None, Settings(_env_file=None, inbox_bucket="b"))
     assert collect_steps == [("fetch",), ("triage",)]
+
+
+async def test_a_failing_edition_does_not_stop_the_others(calls, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    real = pipeline.generate_bulletin
+
+    async def flaky(issue_date, *, edition, anthropic=None):
+        if edition.key == "engineering":
+            raise RuntimeError("gemini down")
+        return await real(issue_date, edition=edition, anthropic=anthropic)
+
+    monkeypatch.setattr(pipeline, "generate_bulletin", flaky)
+    errors = await pipeline.run_daily(
+        today=date(2026, 11, 3), dry_run=True, to=None, settings=Settings(_env_file=None)
+    )
+    assert errors == ["bulletin:engineering"]
+    delivered = [c[1] for c in calls if c[0] == "deliver_bulletin"]
+    assert delivered == [7, 9, 10]

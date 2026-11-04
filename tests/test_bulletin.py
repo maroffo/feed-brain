@@ -9,6 +9,7 @@ from sqlalchemy import select, update
 
 from feed_brain.db.models import Article, Bulletin, FeedSource
 from feed_brain.models import (
+    DAILY_SECTIONS,
     BulletinData,
     BulletinDraft,
     DeepAnalysis,
@@ -416,7 +417,7 @@ async def test_articles_from_the_newsletter_inbox_are_marked_paid(session_factor
                 )
             )
         await session.commit()
-        candidates = await _load_candidates(session, window_hours=36)
+        candidates = await _load_candidates(session, 36, DAILY_SECTIONS)
 
     paid = {c.title: c.paid for c in candidates}
     assert paid == {"paid-post": True, "free-post": False}
@@ -450,7 +451,7 @@ async def test_forwarded_newsletters_are_candidates_whatever_their_tier(session_
                 )
             )
         await session.commit()
-        candidates = await _load_candidates(session, window_hours=36)
+        candidates = await _load_candidates(session, 36, DAILY_SECTIONS)
 
     assert [c.title for c in candidates] == ["low-newsletter"]
 
@@ -627,3 +628,109 @@ async def test_lead_analyses_and_essays_share_one_opus_concurrency_budget(
     data = BulletinData.model_validate_json(bulletin.content_json)
     assert all(s.essay for s in data.top_stories)  # 2 essays + 2 analyses ran
     assert peak == 1
+
+
+def test_every_section_belongs_to_exactly_one_edition():
+    from feed_brain.models import DAILY_SECTIONS, EDITIONS
+
+    owners = [section for edition in EDITIONS.values() for section in edition.sections]
+    assert sorted(owners) == sorted(Section) and len(owners) == len(set(owners))
+    assert EDITIONS["daily"].sections == DAILY_SECTIONS
+    assert Section.AI_DEV in EDITIONS["ai_dev"].sections
+
+
+async def _stamps(session_factory) -> dict[str, int | None]:
+    async with session_factory() as session:
+        return {a.title: a.bulletin_id for a in (await session.execute(select(Article))).scalars()}
+
+
+async def _add_software_article(session_factory, title: str) -> None:
+    async with session_factory() as session:
+        source = (await session.execute(select(FeedSource).limit(1))).scalar_one()
+        session.add(
+            Article(
+                url=f"https://x/{title}",
+                title=title,
+                source_id=source.id,
+                content=LONG_TEXT,
+                status="triaged",
+                tier="high",
+                section="software",
+                confidence=0.8,
+                summary=f"{title} sintesi.",
+                fetched_at=datetime.now(UTC),
+            )
+        )
+        await session.commit()
+
+
+@pytest.mark.usefixtures("analyzed")
+async def test_a_thematic_edition_takes_only_its_sections(session_factory, essays):
+    from feed_brain.models import EDITIONS
+
+    await _seed(session_factory)
+    await _add_software_article(session_factory, "gc-2")
+    gemini = FakeGemini()
+
+    bulletin = await generate_bulletin(
+        ISSUE, edition=EDITIONS["engineering"], gemini=gemini, anthropic=object()
+    )
+
+    assert bulletin.edition == "engineering"
+    data = BulletinData.model_validate_json(bulletin.content_json)
+    assert data.edition == "engineering"
+    stamps = await _stamps(session_factory)
+    assert {t for t, b in stamps.items() if b == bulletin.id} == {"k8s", "gc", "gc-2", "agile"}
+    assert stamps["breach-a"] is None and stamps["politics"] is None  # left to the daily
+    # essays only for stories with at least 2 sources: the software story (gc, gc-2)
+    assert [s.section for s in essays.top] == ["software"]
+    assert "Edizione: Ingegneria" in gemini.writer_prompt
+
+
+@pytest.mark.usefixtures("analyzed")
+async def test_the_daily_writer_gets_no_edition_line_and_every_story_an_essay(
+    session_factory, essays
+):
+    await _seed(session_factory)
+    gemini = FakeGemini()
+    await generate_bulletin(ISSUE, gemini=gemini, anthropic=object())
+    assert "Edizione:" not in gemini.writer_prompt
+    assert len(essays.top) == 2  # security (2 sources) and politics (1 source)
+
+
+async def test_an_empty_edition_stores_and_stamps_nothing(session_factory):
+    from feed_brain.models import EDITIONS
+
+    await _seed(session_factory)
+    assert (
+        await generate_bulletin(
+            ISSUE, edition=EDITIONS["ai_dev"], gemini=FakeGemini(), anthropic=None
+        )
+        is None
+    )
+    async with session_factory() as session:
+        assert (await session.execute(select(Bulletin))).first() is None
+
+
+@pytest.mark.usefixtures("analyzed")
+async def test_force_on_one_edition_leaves_the_other_editions_of_the_day(session_factory):
+    from feed_brain.models import EDITIONS
+
+    await _seed(session_factory)
+    engineering = EDITIONS["engineering"]
+    daily = await generate_bulletin(ISSUE, gemini=FakeGemini(), anthropic=object())
+    first = await generate_bulletin(
+        ISSUE, edition=engineering, gemini=FakeGemini(), anthropic=object()
+    )
+    again = await generate_bulletin(
+        ISSUE, edition=engineering, gemini=FakeGemini(), anthropic=object()
+    )
+    assert again.id == first.id  # idempotent per edition
+    forced = await generate_bulletin(
+        ISSUE, edition=engineering, force=True, gemini=FakeGemini(), anthropic=object()
+    )
+    async with session_factory() as session:
+        editions = {b.edition: b.id for b in (await session.execute(select(Bulletin))).scalars()}
+    assert editions == {"daily": daily.id, "engineering": forced.id}
+    stamps = await _stamps(session_factory)
+    assert stamps["breach-a"] == daily.id and stamps["k8s"] == forced.id

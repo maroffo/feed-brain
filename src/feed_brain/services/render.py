@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 
 from jinja2 import Environment, PackageLoader, select_autoescape
 
-from feed_brain.models import SECTION_TITLES, BulletinData, TopStory, WeeklyData
+from feed_brain.models import SECTION_TITLES, BulletinData, TopStory, WeeklyData, edition_for
 from feed_brain.services.bulletin import italian_date
 from feed_brain.services.feedback import StoryLinks
 
@@ -76,7 +76,7 @@ def render_bulletin_html(
         data=data,
         section_titles=SECTION_TITLES,
         page_title=f"{data.title} · {day}",
-        kicker=f"Bollettino · {day}",
+        kicker=f"{edition_for(data.edition).title} · {day}",
         site_url=site_url,
         public=public,
         links=None if public else links,
@@ -91,10 +91,10 @@ def render_bulletin_md(data: BulletinData) -> str:
 def write_bulletin_files(
     data: BulletinData, out_dir: Path, site_url: str | None = None
 ) -> tuple[Path, Path]:
-    """Write <out_dir>/bulletins/<date>.html and .md; returns both paths."""
+    """Write <out_dir>/bulletins/<stem>.html and .md (stem: Edition.stem); returns both paths."""
     folder = out_dir / "bulletins"
     folder.mkdir(parents=True, exist_ok=True)
-    stem = data.issue_date.isoformat()
+    stem = edition_for(data.edition).stem(data.issue_date)
     html_path = folder / f"{stem}.html"
     md_path = folder / f"{stem}.md"
     html_path.write_text(render_bulletin_html(data, site_url), encoding="utf-8")
@@ -140,14 +140,26 @@ def write_weekly_files(
     return html_path, md_path
 
 
-def render_index_html(bulletins: list[tuple[date, str]], weeklies: list[tuple[date, str]]) -> str:
-    """Archive page; inputs are (issue_date, title) and (week_start, title), newest first."""
+def render_index_html(
+    bulletins: list[tuple[date, str, str]], weeklies: list[tuple[date, str]]
+) -> str:
+    """Archive page; inputs are (issue_date, edition, title) and (week_start, title), newest
+    first."""
     weekly_rows = []
     for start, title in weeklies:
         year, week, _ = start.isocalendar()
         weekly_rows.append({"label": f"{year}-W{week:02d}", "title": title})
     return _env.get_template("index.html").render(
-        bulletins=[{"issue_date": d, "title": t} for d, t in bulletins],
+        bulletins=[
+            {
+                "stem": edition_for(e).stem(d),
+                "label": d.isoformat()
+                if edition_for(e).is_daily
+                else f"{d} · {edition_for(e).title}",
+                "title": t,
+            }
+            for d, e, t in bulletins
+        ],
         weeklies=weekly_rows,
         page_title="feed-brain",
         kicker="Archivio",

@@ -102,3 +102,29 @@ def test_serve_runs_the_vote_service_on_the_cloud_run_port(monkeypatch):
     cli.main()
     assert seen["port"] == 9123 and seen["host"] == "0.0.0.0" and seen["access_log"] is False
     assert seen["app"].__class__.__name__ == "Starlette"
+
+
+def test_bulletin_builds_the_edition_it_is_asked_for(monkeypatch, tmp_path):
+    """`bulletin --edition engineering` generates that edition; unknown editions are refused."""
+    from datetime import date
+
+    import pytest
+
+    from feed_brain import __main__ as cli
+    from feed_brain.services import bulletin as bulletin_mod
+
+    seen = {}
+
+    async def fake_generate(issue_date, *, edition, force=False, anthropic=None):  # noqa: ARG001
+        seen.update(issue_date=issue_date, edition=edition.key, force=force)
+
+    monkeypatch.setattr(bulletin_mod, "generate_bulletin", fake_generate)
+    monkeypatch.setattr("feed_brain.services.analyzer.make_client", lambda: None)
+    argv = ["feed-brain", "bulletin", "--edition", "engineering", "--date", "2026-11-05"]
+    monkeypatch.setattr("sys.argv", [*argv, "--out", str(tmp_path)])
+    cli.main()
+    assert seen == {"issue_date": date(2026, 11, 5), "edition": "engineering", "force": False}
+
+    monkeypatch.setattr("sys.argv", ["feed-brain", "bulletin", "--edition", "nope"])
+    with pytest.raises(SystemExit):
+        cli.main()

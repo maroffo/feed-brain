@@ -214,3 +214,28 @@ def test_weekly_prompt_uses_key_points_and_falls_back_to_the_prose_editorial():
 
     assert "Punti del giorno: Primo fatto. Secondo fatto." in prompt
     assert f"Editoriale: Editoriale del {MONDAY + timedelta(days=1)}." in prompt
+
+
+async def test_the_weekly_recaps_the_main_issue_only(session_factory):
+    await _seed(session_factory, [MONDAY])
+    theme = _bulletin_data(MONDAY + timedelta(days=1), 2).model_copy(
+        update={"edition": "engineering", "title": "Tema"}
+    )
+    async with session_factory() as session:
+        session.add(
+            Bulletin(
+                issue_date=theme.issue_date,
+                edition="engineering",
+                title="Tema",
+                subtitle="",
+                editorial="",
+                content_json=theme.model_dump_json(),
+                articles_count=2,
+            )
+        )
+        await session.commit()
+    gemini = FakeGemini()
+    digest = await generate_weekly(MONDAY, gemini=gemini)
+    data = WeeklyData.model_validate_json(digest.content_json)
+    assert [b.issue_date for b in data.bulletins] == [MONDAY]
+    assert str(MONDAY + timedelta(days=1)) not in gemini.prompts[0]

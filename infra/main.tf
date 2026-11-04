@@ -147,7 +147,7 @@ resource "google_cloud_run_v2_job" "feed_brain" {
     task_count = 1
     template {
       service_account = google_service_account.job.email
-      timeout         = "1800s"
+      timeout         = "3600s" # five editions with Opus notes and essays in one run
       max_retries     = 1
 
       vpc_access {

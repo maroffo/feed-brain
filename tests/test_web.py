@@ -246,3 +246,47 @@ async def test_essays_do_not_expire_like_votes(session_factory):
     async with _client() as client:
         page = await client.get(_essay_link(day=old))
     assert page.status_code == 200 and "Secondo." in page.text
+
+
+async def test_votes_and_essays_reach_a_thematic_issue_of_the_same_day(session_factory):
+    await _seed(session_factory)  # the daily issue
+    theme_url = "https://infoq/k8s"
+    theme = BulletinData(
+        issue_date=TODAY,
+        edition="engineering",
+        title="t",
+        top_stories=[
+            TopStory(
+                title="Kubernetes 2.0",
+                text="x",
+                section=Section.CLOUD_DEVOPS,
+                sources=[SourceRef(name="InfoQ", title="K8s", url=theme_url)],
+                essay=ESSAY,
+            )
+        ],
+        sections=[],
+        articles_count=1,
+    )
+    async with session_factory() as session:
+        session.add(
+            Bulletin(
+                issue_date=TODAY,
+                edition="engineering",
+                title="t",
+                subtitle="",
+                editorial="",
+                content_json=theme.model_dump_json(),
+                articles_count=1,
+            )
+        )
+        await session.commit()
+    async with _client() as client:
+        vote = await client.post(_link("up", theme_url))
+        essay = await client.get(_essay_link(theme_url))
+        daily_vote = await client.post(_link("down"))
+    assert vote.status_code == 200 and essay.status_code == 200 and "Kubernetes 2.0" in essay.text
+    assert daily_vote.status_code == 200
+    assert {v.headline for v in await _votes(session_factory)} == {
+        "Kubernetes 2.0",
+        "Frigoriferi <b>sotto</b> attacco",
+    }
