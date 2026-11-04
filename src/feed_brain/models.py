@@ -28,8 +28,8 @@ class Category(StrEnum):
 class Section(StrEnum):
     """Bulletin sections, derived from the OPML folders (plan Appendix A).
 
-    THREAT_RADAR, RESEARCH and MANAGEMENT are still assigned by triage but stay out of the
-    daily issue (see DAILY_AREAS); stored issues may still carry them.
+    THREAT_RADAR, RESEARCH, MANAGEMENT, CLOUD_DEVOPS and SOFTWARE are still assigned by triage
+    but stay out of the daily issue (see DAILY_AREAS); stored issues may still carry them.
     """
 
     SECURITY = "security"
@@ -66,7 +66,7 @@ SECTION_TITLES: dict[Section, str] = {
 DAILY_AREAS: tuple[tuple[Section, ...], ...] = (
     (Section.POLITICS, Section.ECONOMY),
     (Section.CULTURE, Section.SPORT),
-    (Section.SECURITY, Section.AI, Section.TECH, Section.CLOUD_DEVOPS, Section.SOFTWARE),
+    (Section.SECURITY, Section.AI, Section.TECH),
 )
 DAILY_SECTIONS: tuple[Section, ...] = tuple(section for area in DAILY_AREAS for section in area)
 

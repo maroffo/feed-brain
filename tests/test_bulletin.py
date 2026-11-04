@@ -481,7 +481,9 @@ def test_issue_shows_the_quote_always_and_notes_only_for_actionable_stories():
 def test_sections_outside_the_daily_issue_are_left_out():
     rest = [
         Story(section, [_cand(i, section=section, tier="medium")], section)
-        for i, section in enumerate(["research", "management", "threat_radar", "politics"], 1)
+        for i, section in enumerate(
+            ["research", "management", "threat_radar", "cloud_devops", "software", "politics"], 1
+        )
     ]
     data = assemble(ISSUE, None, [], rest, {}, 4)
     assert [b.key for b in data.sections] == [Section.POLITICS]
