@@ -287,9 +287,9 @@ def test_weekly_public_page_hides_arc_text_backed_by_paid_sources():
     assert "Racconto riservato" in render_weekly_html(weekly)
 
 
-def test_single_source_brief_names_its_source_without_repeating_the_link():
-    """The headline already links the article: a single-source brief adds only the outlet name
-    (keeps the email under Gmail's clip size); multi-source briefs keep the full source list."""
+def test_briefs_name_their_outlets_without_repeating_titles():
+    """The headline already links the lead article: a brief adds outlet names only (keeps the
+    email under Gmail's clip size); the other outlets link their own article."""
     multi = BriefItem(
         headline="Due fonti",
         summary="",
@@ -310,7 +310,9 @@ def test_single_source_brief_names_its_source_without_repeating_the_link():
     html = render_bulletin_html(data)
     assert html.count('href="https://onrugby/x"') == 1
     assert "On Rugby" in html and "On Rugby: Italia" not in html
-    assert "Krebs: A" in html and "Il Post: B" in html
+    assert html.count('href="https://krebs/x"') == 1  # the headline only
+    assert "Krebs: A" not in html and "Il Post: B" not in html
+    assert '<a href="https://post/y">Il Post</a>' in html
 
 
 def test_notes_appear_only_when_the_story_carries_them():
@@ -420,12 +422,15 @@ def test_email_carries_quiet_vote_links_on_top_stories_and_briefs():
     assert story.index("Verifica i backup") < story.index("più così")
 
 
-def test_brief_votes_end_the_text_line_even_when_sources_follow_on_their_own_line():
+def test_brief_votes_close_the_line_after_the_outlets():
     issue = _two_brief_issue(omitted=0)
     links = StoryLinks("https://fb.run.app", b"k" * 32, issue.issue_date)
     html = render_bulletin_html(issue, links=links)
-    item = html[html.index("Secondo breve") :]
-    assert item.index(links.votes("https://b/1")["down"]) < item.index('<div class="src">')
+    item = html[html.index("Secondo breve") : html.index("Altro")]
+    assert item.index('<a href="https://b/2">Due</a>') < item.index(
+        links.votes("https://b/1")["down"]
+    )
+    assert '<div class="src">' not in item
 
 
 def test_no_vote_links_without_vote_links_on_the_public_page_or_in_the_vault_note():
@@ -502,3 +507,61 @@ def test_the_vault_note_and_page_name_their_edition():
     assert "\nedition: daily\n" in render_bulletin_md(DATA)
     assert "Ingegneria · 2 novembre 2026" in render_bulletin_html(theme)
     assert "Bollettino · 2 novembre 2026" in render_bulletin_html(DATA)
+
+
+def _essay_story(**update) -> TopStory:
+    from feed_brain.models import StoryEssay
+
+    story = DATA.top_stories[0].model_copy(
+        update={
+            "sources": [
+                SourceRef(name="Krebs", title="Big breach", url="https://krebs/a"),
+                SourceRef(name="Il Post", title="Attacco", url="https://post/b"),
+                SourceRef(name="Krebs", title="Follow-up", url="https://krebs/c"),
+            ],
+            "essay": StoryEssay(
+                lede="L.", watch=["Da seguire"], paragraphs=["Uno."], sources_read=3
+            ),
+        }
+    )
+    return story.model_copy(update=update)
+
+
+def test_with_a_reachable_essay_the_email_keeps_text_quote_essay_link_and_one_outlet_line():
+    links = _links()
+    html = render_bulletin_html(
+        DATA.model_copy(update={"top_stories": [_essay_story()]}), links=links
+    )
+    story = html[html.index("Breccia in Italia") : html.index("Sport")]
+    # outlets once each, in order of appearance, with their article count, linking the first one
+    assert '<a href="https://krebs/a">Krebs</a> (2) · <a href="https://post/b">Il Post</a>' in story
+    assert "Big breach" not in story and "Follow-up" not in story
+    # the notes moved to the essay page
+    assert "Approfondimento" not in story and "Insight uno" not in story and "Da fare" not in story
+    essay = links.essay("https://krebs/a")
+    assert f'<div class="ess"><a href="{essay}">' in story
+    order = ["Secondo Krebs", "The quote.", essay, ">Krebs</a> (2)", "più così"]
+    assert [story.index(x) for x in order] == sorted(story.index(x) for x in order)
+
+
+def test_without_a_reachable_essay_the_notes_and_every_source_stay_in_the_page():
+    with_essay = DATA.model_copy(update={"top_stories": [_essay_story()]})
+    for html in (
+        render_bulletin_html(with_essay),  # public page: no essay link to follow
+        render_bulletin_html(DATA, links=_links()),  # email, story without an essay
+    ):
+        story = html[html.index("Breccia in Italia") : html.index("Sport")]
+        assert "Krebs: Big breach" in story and "Il Post: Attacco" in story
+        assert "Approfondimento" in story and "Verifica i backup" in story
+        assert story.index("Verifica i backup") < story.index("Krebs: Big breach")
+        assert 'class="ess"' not in story
+
+
+def test_the_essay_page_carries_the_story_notes_before_its_sources():
+    from feed_brain.services.render import render_essay_page
+
+    page = render_essay_page(_essay_story(), DATA.issue_date)
+    assert "Insight uno" in page and "Verifica i backup" in page
+    order = ["Cosa seguire", "Approfondimento", "Da fare", "Fonti"]
+    assert [page.index(x) for x in order] == sorted(page.index(x) for x in order)
+    assert "Approfondimento" not in render_essay_page(_essay_story(analysis=None), DATA.issue_date)

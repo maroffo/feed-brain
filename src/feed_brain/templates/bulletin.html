@@ -28,13 +28,13 @@
 {% else %}
 <p>{{ story.text }}</p>
 {% if story.analysis and story.analysis.money_quote %}<blockquote>“{{ story.analysis.money_quote }}”</blockquote>{% endif %}
-{{ m.sources(story.sources) }}
+{#- With an essay to open (email only), its page carries the notes and the full source list. -#}
+{% if links and story.essay %}
 {{ m.essay_link(links, story) }}
-{% if story.analysis and (story.analysis.insights or story.analysis.actionables) %}
-<div class="deep">
-{% if story.analysis.insights %}<b>Approfondimento</b><ul>{% for i in story.analysis.insights %}<li>{{ i }}</li>{% endfor %}</ul>{% endif %}
-{% if story.analysis.actionables %}<b>Da fare</b><ul>{% for a in story.analysis.actionables %}<li>{{ a }}</li>{% endfor %}</ul>{% endif %}
-</div>
+{{ m.outlet_line(story.sources) }}
+{% else %}
+{{ m.notes(story.analysis) }}
+{{ m.sources(story.sources) }}
 {% endif %}
 {% endif %}
 {{ m.story_votes(links, story.sources[0].url) }}
@@ -49,9 +49,8 @@
 <div class="item">
 {{ m.link(item.sources[0].url, item.headline, "h") }}
 {% if item.summary and not reserved %}<span class="muted"> {{ item.summary }}</span>{% endif %}
-{#- The headline already links a single source: name the outlet only (email size). -#}
-{#- Votes close the text line: before a multi-source list (its own line), after a single outlet. -#}
-{% if item.sources | length > 1 %}{{ m.brief_votes(links, item.sources[0].url) }}{{ m.sources(item.sources) }}{% else %}<span class="more"> · {{ item.sources[0].name }}</span>{{ m.brief_votes(links, item.sources[0].url) }}{% endif %}
+{#- The headline links the lead article: outlets by name only, which keeps the email small. -#}
+{{ m.brief_outlets(item.sources) }}{{ m.brief_votes(links, item.sources[0].url) }}
 </div>
 {% endfor %}
 {% if block.omitted %}<div class="more">{{ block.omitted | folded }}</div>{% endif %}

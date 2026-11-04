@@ -278,6 +278,27 @@ async def test_no_candidates_returns_none():
     assert await generate_bulletin(ISSUE, gemini=FakeGemini(), anthropic=None) is None
 
 
+def test_first_sentence_does_not_stop_at_abbreviations_initials_or_numbers():
+    cut = first_sentence
+    assert cut("Il decreto-legge n. 123 cambia le pene. Le opposizioni protestano.") == (
+        "Il decreto-legge n. 123 cambia le pene."
+    )
+    assert (
+        cut("Lo scrive J. K. Rowling nel suo blog. Poi altro.")
+        == "Lo scrive J. K. Rowling nel suo blog."
+    )
+    assert (
+        cut("Lo conferma il dott. Rossi in aula. Poi altro.")
+        == "Lo conferma il dott. Rossi in aula."
+    )
+    assert (
+        cut("Arrivano gli U.S. Marines a Okinawa. Poi altro.")
+        == "Arrivano gli U.S. Marines a Okinawa."
+    )
+    assert cut("Cresce del 3.5% il PIL. Poi altro.") == "Cresce del 3.5% il PIL."
+    assert cut("Chi paga davvero?") == "Chi paga davvero?"
+
+
 def test_short_source_name():
     from feed_brain.services.bulletin import short_source_name
 
@@ -285,6 +306,7 @@ def test_short_source_name():
     assert short_source_name("DDay.it, news, articoli, guide, gallery e video") == "DDay.it"
     assert short_source_name("Krebs on Security") == "Krebs on Security"
     assert short_source_name("SANS ISC | InfoCON: green") == "SANS ISC"
+    assert short_source_name("NYT > Top Stories") == "NYT"
     assert short_source_name("Notiziole di .mau.") == "Notiziole di .mau."
     assert short_source_name(None) == "Fonte sconosciuta"
 

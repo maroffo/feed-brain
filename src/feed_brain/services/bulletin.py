@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+import re
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from typing import Protocol
@@ -85,18 +86,35 @@ def short_source_name(name: str | None) -> str:
     """Outlet name without the feed's tagline ('Over Security - Cybersecurity news' → 'Over Security')."""
     if not name:
         return "Fonte sconosciuta"
-    for separator in (" - ", " | ", " – ", ", "):
+    for separator in (" - ", " | ", " – ", " > ", ", "):
         name = name.split(separator, 1)[0]
     return name.strip() or "Fonte sconosciuta"
 
 
+# A period after these does not end the sentence ("n. 123", "dott. Rossi").
+_ABBREVIATIONS = frozenset(
+    {"n", "nr", "art", "artt", "co", "dott", "dr", "prof", "sig", "on", "sen", "avv", "ing"}
+    | {"mr", "mrs", "ms", "st", "vs", "ecc", "etc", "pag", "cap", "fig", "vol"}
+)
+_SENTENCE_END = re.compile(r"(\S+)\.\s+(?=[\"'«“(]?[A-ZÀ-Þ])")
+_DOTTED = re.compile(r"(?:[^\W\d_]\.)+[^\W\d_]")  # "u.s", "s.p.a": letters joined by periods
+
+
 def first_sentence(text: str) -> str:
-    """First sentence of a summary, always ending with a period (empty stays empty)."""
+    """First sentence of a summary, ending with its own punctuation (empty stays empty).
+
+    A period ends the sentence only before a capital letter, and never after an initial ("J."),
+    a known abbreviation ("n.", "dott.") or an acronym written with periods ("U.S.", "S.p.A.").
+    """
     text = " ".join((text or "").split())
     if not text:
         return ""
-    head = text.split(". ", 1)[0].rstrip(".")
-    return f"{head}."
+    for match in _SENTENCE_END.finditer(text):
+        word = match.group(1).lstrip("(\"'«“").lower()
+        initial = len(word) == 1 and word.isalpha()
+        if not initial and word not in _ABBREVIATIONS and not _DOTTED.fullmatch(word):
+            return text[: match.end(1)] + "."
+    return text if text[-1] in ".!?" else f"{text}."
 
 
 def _sources(story: Story) -> list[SourceRef]:
