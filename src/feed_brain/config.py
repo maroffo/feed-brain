@@ -86,7 +86,7 @@ class Settings(BaseSettings):
     sender_name: str = "feed-brain"
     digest_recipient: str | None = None
 
-    # Story votes: one-click 👍/👎 links in the email, served by the `serve` Cloud Run service.
+    # Story votes: one-click vote links in the email, served by the `serve` Cloud Run service.
     # Both unset = no buttons. The key signs the links (job) and checks them (service).
     feedback_url: str | None = (
         None  # service base URL, e.g. https://feed-brain-feedback-xyz.run.app

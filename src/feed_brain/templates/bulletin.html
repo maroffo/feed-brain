@@ -20,7 +20,7 @@
 {% for story in data.top_stories %}
 {% set reserved = public and story.sources | selectattr("paid") | list %}
 <div class="story">
-<div class="k">{{ section_titles[story.section] }}{% if story.sources|length > 1 %} · {{ story.sources|length }} fonti{% endif %}{{ m.thumbs(votes, story.sources[0].url) }}</div>
+<div class="k">{{ section_titles[story.section] }}{% if story.sources|length > 1 %} · {{ story.sources|length }} fonti{% endif %}</div>
 <h3>{{ story.title }}</h3>
 {% if reserved %}
 {{ m.reserved_note() }}
@@ -36,6 +36,7 @@
 </div>
 {% endif %}
 {% endif %}
+{{ m.story_votes(votes, story.sources[0].url) }}
 </div>
 {% endfor %}
 {% endif %}
@@ -48,8 +49,8 @@
 {{ m.link(item.sources[0].url, item.headline, "h") }}
 {% if item.summary and not reserved %}<span class="muted"> {{ item.summary }}</span>{% endif %}
 {#- The headline already links a single source: name the outlet only (email size). -#}
-{% if item.sources | length > 1 %}{{ m.sources(item.sources) }}{% else %}<span class="more"> · {{ item.sources[0].name }}</span>{% endif %}
-{{ m.thumbs(votes, item.sources[0].url) }}
+{#- Votes close the text line: before a multi-source list (its own line), after a single outlet. -#}
+{% if item.sources | length > 1 %}{{ m.brief_votes(votes, item.sources[0].url) }}{{ m.sources(item.sources) }}{% else %}<span class="more"> · {{ item.sources[0].name }}</span>{{ m.brief_votes(votes, item.sources[0].url) }}{% endif %}
 </div>
 {% endfor %}
 {% if block.omitted %}<div class="more">{{ block.omitted | folded }}</div>{% endif %}

@@ -1,4 +1,4 @@
-# ABOUTME: `feed-brain serve`: the public service behind the 👍/👎 links of the daily email.
+# ABOUTME: `feed-brain serve`: the public service behind the vote links of the daily email.
 # ABOUTME: GET shows the story and its script casts the vote (link scanners run no JS); POST records it.
 
 import json
@@ -30,7 +30,7 @@ from feed_brain.services.render import render_vote_page
 log = structlog.get_logger()
 
 HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex"}
-THUMBS = {"up": "👍", "down": "👎"}
+LABELS = {"up": "più così", "down": "meno così"}  # the words of the email
 
 
 def _page(status: int, message: str, **page: str) -> HTMLResponse:
@@ -109,14 +109,14 @@ def create_app(settings: Settings | None = None) -> Starlette:
         if isinstance(resolved, Response):
             return resolved
         day, key, vote, story = resolved
-        thumb = THUMBS[vote]
+        label = LABELS[vote]
         if request.method == "GET":
             return _page(
                 200,
-                f"Registro il voto {thumb}…",
+                f"Registro: {label}…",
                 state="pending",
                 headline=story.headline,
-                thumb=thumb,
+                label=label,
             )
         if request.query_params.get("undo") == "1":
             await _undo(day, key)
@@ -127,7 +127,7 @@ def create_app(settings: Settings | None = None) -> Starlette:
         undo_url = f"{request.url.path}?s={request.query_params['s']}&undo=1"
         return _page(
             200,
-            f"Registrato {thumb}",
+            f"Registrato: {label}",
             state="recorded",
             headline=story.headline,
             undo_url=undo_url,

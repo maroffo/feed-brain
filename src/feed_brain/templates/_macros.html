@@ -16,8 +16,13 @@
 {% macro reserved_note() -%}
 <p class="muted">Contenuto per abbonati: leggilo alla fonte.</p>
 {%- endmacro %}
-{% macro thumbs(votes, url) -%}
+{% macro story_votes(votes, url) -%}
 {%- if votes -%}{%- set v = votes(url) -%}
-<span class="vote"> <a href="{{ v.up | safe_url }}" title="Mi interessa">👍</a> <a href="{{ v.down | safe_url }}" title="Non mi interessa">👎</a></span>
+<div class="vote"><a href="{{ v.up | safe_url }}" title="Mi interessa">più così</a> · <a href="{{ v.down | safe_url }}" title="Non mi interessa">meno così</a></div>
+{%- endif -%}
+{%- endmacro %}
+{% macro brief_votes(votes, url) -%}
+{%- if votes -%}{%- set v = votes(url) -%}
+<span class="vote-b"> <a href="{{ v.up | safe_url }}" title="Più così">+</a> <a href="{{ v.down | safe_url }}" title="Meno così">−</a></span>
 {%- endif -%}
 {%- endmacro %}

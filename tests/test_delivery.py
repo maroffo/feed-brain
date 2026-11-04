@@ -267,8 +267,8 @@ async def test_email_gets_vote_links_only_when_the_feedback_service_is_configure
 
     links = VoteLinks("https://fb.run.app", b"k" * 32, DAY)("https://ilpost/p")
     assert f'href="{links["up"]}"' in sent.html[0] and f'href="{links["down"]}"' in sent.html[0]
-    assert "👍" not in site.read_text("bulletins/2026-11-02.html")
-    assert "👍" not in sent.html[1]
+    assert "più così" not in site.read_text("bulletins/2026-11-02.html")
+    assert "più così" not in sent.html[1]
 
 
 def test_no_vote_links_with_a_blank_key():

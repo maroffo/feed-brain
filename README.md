@@ -16,7 +16,7 @@ Cloud Scheduler 06:30 Europe/Rome
        3. weekly    on Sunday (or catch-up Mon-Sat) from the week's bulletins
 
 Cloud Run service `feed-brain serve` (public, scales to zero)
-  └─ 👍/👎 links of the email → story_votes
+  └─ vote links of the email → story_votes
 
 Mac (launchd, hourly)
   └─ `feed-brain sync-vault`: vault outbox (GCS) → Obsidian topic notes + Digests/, local OPML → GCS
@@ -28,7 +28,7 @@ Mac (launchd, hourly)
 - **Ranking**: `score = tier weight (high 2, medium 1) + source boost (2 feeds 0.5, 3 feeds 0.8, 4+ 1.0) + confidence`.
 - **Idempotency**: one bulletin per day (`--force` regenerates); each article is covered once; `published_at` / `sent_at` make job retries safe.
 - **Newsletter inbox**: paid newsletters forwarded from Gmail to any address on `in.behindbars.news` land in S3 (SES receiving, eu-west-1) and become articles during `collect`. Tracking links are decoded offline and reduced to the clean post URL (they carry personal tokens); only text is stored. Forwarded newsletters are always bulletin candidates. On the public page their stories show title and link only; email and vault keep everything.
-- **Story votes**: every story of the email (top stories and 'In breve') carries 👍/👎 links signed with HMAC (`issue_date`, a hash of the story's first source URL, the vote). The link opens a page of the `serve` service whose script casts the vote, so link scanners that open mail links without running JS record nothing; a `<noscript>` button covers browsers without JS. The last click wins, the page offers 'Annulla'. Votes on issues older than 30 days are refused. The public page and the vault note carry no buttons.
+- **Story votes**: every story of the email (top stories and 'In breve') carries vote links signed with HMAC ('più così · meno così' under a top story, '+ −' at the end of a brief) (`issue_date`, a hash of the story's first source URL, the vote). The link opens a page of the `serve` service whose script casts the vote, so link scanners that open mail links without running JS record nothing; a `<noscript>` button covers browsers without JS. The last click wins, the page offers 'Annulla'. Votes on issues older than 30 days are refused. The public page and the vault note carry no buttons.
 - **Vault**: the bulletin and recap notes go to `Digests/`; the leads of the top stories (high tier, confidence ≥ 0.8) are appended to the Second Brain topic notes, once per URL.
 
 ## Stack
@@ -64,7 +64,7 @@ make test-e2e    # Alembic + asyncpg integration tests on the docker Postgres
 | `collect [--dry-run]` | Sync feeds from the GCS OPML (when `DATA_BUCKET` is set), fetch, read the newsletter inbox (when `INBOX_BUCKET` is set; `--dry-run` keeps the mails), triage |
 | `bulletin [--date] [--force] [--out]` | Generate (or reuse) the day's bulletin and render it locally |
 | `weekly [--week YYYY-Www] [--force] [--out]` | Generate the recap for a week (default: the week that is due) |
-| `serve` | Vote service behind the email's 👍/👎 links (Cloud Run service; listens on `$PORT`) |
+| `serve` | Vote service behind the email's vote links (Cloud Run service; listens on `$PORT`) |
 | `sync-vault [--outbox DIR] [--vault DIR] [--no-opml]` | Mac side of the vault bridge |
 | `migrate` | Apply Alembic migrations |
 | `analyze --article-id N` | Opus deep analysis of one article |

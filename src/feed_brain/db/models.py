@@ -134,7 +134,7 @@ class WeeklyDigest(Base):
 
 
 class StoryVote(Base):
-    """One 👍/👎 on a story of a daily issue, keyed by date and first-source hash.
+    """One up/down vote on a story of a daily issue, keyed by date and first-source hash.
 
     No FK to bulletins: `bulletin --force` deletes and re-inserts the issue row, and the
     snapshot (headline, section, sources) keeps the vote readable without it.
