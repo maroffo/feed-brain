@@ -15,7 +15,7 @@ ul.watch li{margin-bottom:4px}
 <div class="body">
 {% if story.essay.lede %}<p class="lede">{{ story.essay.lede }}</p>{% endif %}
 {% for section in story.essay.sections %}
-<h2 class="essay">{{ section.heading }}</h2>
+{% if section.heading %}<h2 class="essay">{{ section.heading }}</h2>{% endif %}
 {% for paragraph in section.paragraphs %}<p>{{ paragraph }}</p>
 {% endfor %}
 {% endfor %}

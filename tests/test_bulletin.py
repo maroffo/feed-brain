@@ -595,6 +595,7 @@ async def test_lead_analyses_and_essays_share_one_opus_concurrency_budget(
     import asyncio
 
     from feed_brain.config import Settings
+    from feed_brain.models import EssaySection
     from feed_brain.services import essay as essay_mod
     from feed_brain.services.essay import EssayDraft
 
@@ -613,7 +614,9 @@ async def test_lead_analyses_and_essays_share_one_opus_concurrency_budget(
 
     async def fake_opus(*_args):
         await opus_call()
-        return EssayDraft(lede="L.", sections=[], watch=[])
+        return EssayDraft(
+            lede="L.", sections=[EssaySection(heading="H", paragraphs=["P."])], watch=[]
+        )
 
     monkeypatch.setattr(bulletin_mod, "deep_analyze", fake_deep_analyze)
     monkeypatch.setattr(bulletin_mod, "write_essays", essay_mod.write_essays)  # the real one

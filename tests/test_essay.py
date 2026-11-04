@@ -124,3 +124,45 @@ def test_titles_outlets_and_any_case_of_the_tag_cannot_forge_or_close_a_source()
     )
     assert prompt.lower().count("<source>") == 1 and prompt.lower().count("</source>") == 1
     assert "Titolo" in prompt and "ANSA" in prompt  # neutralized, not dropped
+
+
+async def test_no_dashes_survive_whatever_the_model_writes(monkeypatch):
+    """Long and en dashes become commas (ranges between numbers a hyphen): a hard rule."""
+
+    async def dashed(*_args):
+        return EssayDraft(
+            lede="Hanno colpito i frigoriferi — non le casse.",
+            sections=[
+                EssaySection(heading="Chi – e come", paragraphs=["Tra 10–15 negozi—forse di più."])
+            ],
+            watch=["L'indagine — se arriva"],
+        )
+
+    monkeypatch.setattr(essay_mod, "opus_structured", dashed)
+    story = Story("security", [_cand(1)], "h")
+    essay = (await write_essays([story], {1: _article(1, "A" * 500)}, object(), SETTINGS))[
+        story.lead.article_id
+    ]
+    assert essay.lede == "Hanno colpito i frigoriferi, non le casse."
+    assert essay.sections[0].heading == "Chi, e come"
+    assert essay.sections[0].paragraphs == ["Tra 10-15 negozi, forse di più."]
+    assert essay.watch == ["L'indagine, se arriva"]
+
+
+async def test_a_lede_without_any_section_is_no_essay(monkeypatch):
+    async def lede_only(*_args):
+        return EssayDraft(
+            lede="Due frasi.", sections=[EssaySection(heading="H", paragraphs=[" "])], watch=["W"]
+        )
+
+    monkeypatch.setattr(essay_mod, "opus_structured", lede_only)
+    story = Story("security", [_cand(1)], "h")
+    assert await write_essays([story], {1: _article(1, "A" * 500)}, object(), SETTINGS) == {}
+
+
+def test_the_prompt_assumes_a_technical_reader_and_forbids_repeats_and_lessons():
+    from feed_brain.services.essay import SYSTEM_PROMPT
+
+    assert "knows software, cloud and security" in SYSTEM_PROMPT
+    assert "Do not repeat a fact" in SYSTEM_PROMPT
+    assert "belongs to its heading" in SYSTEM_PROMPT

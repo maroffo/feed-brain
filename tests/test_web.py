@@ -321,3 +321,15 @@ async def test_essays_written_before_sections_still_read(session_factory):
     async with _client() as client:
         page = (await client.get(_essay_link())).text
     assert "<p>Primo &lt;i&gt;paragrafo&lt;/i&gt;.</p>" in page and "Cosa seguire" not in page
+
+
+async def test_a_section_without_heading_renders_no_empty_title(session_factory):
+    from feed_brain.models import EssaySection
+
+    essay = StoryEssay(
+        lede="L.", sections=[EssaySection(heading="", paragraphs=["Corpo."])], sources_read=1
+    )
+    await _seed(session_factory, essay=essay)
+    async with _client() as client:
+        page = (await client.get(_essay_link())).text
+    assert '<h2 class="essay"></h2>' not in page and "<p>Corpo.</p>" in page
