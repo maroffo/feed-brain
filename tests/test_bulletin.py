@@ -166,6 +166,8 @@ async def _seed(session_factory) -> dict[str, int]:
             art("radar-low", krebs, tier="low", section="threat_radar"),
             art("paper", krebs, tier="high", section="research"),
             art("agile", post, tier="high", section="management"),
+            art("k8s", post, tier="high", section="cloud_devops"),
+            art("gc", krebs, tier="high", section="software"),
             art("old", krebs, fetched_at=now - timedelta(hours=72)),
             art("untriaged", krebs, status="new", tier=None, section=None),
         ]
@@ -196,8 +198,8 @@ async def test_generate_bulletin_persists_stamps_and_is_idempotent(session_facto
         "breach-b",
         "politics",
     }
-    # threat radar, research and management stay out of the daily issue, unstamped
-    assert {stamped[t] for t in ("radar-low", "paper", "agile")} == {None}
+    # threat radar, research, management, cloud/DevOps and software stay out, unstamped
+    assert {stamped[t] for t in ("radar-low", "paper", "agile", "k8s", "gc")} == {None}
     assert analyzed  # leads of top stories analyzed
     async with session_factory() as session:
         lead = await session.get(Article, analyzed[0])
@@ -485,7 +487,7 @@ def test_sections_outside_the_daily_issue_are_left_out():
             ["research", "management", "threat_radar", "cloud_devops", "software", "politics"], 1
         )
     ]
-    data = assemble(ISSUE, None, [], rest, {}, 4)
+    data = assemble(ISSUE, None, [], rest, {}, 6)
     assert [b.key for b in data.sections] == [Section.POLITICS]
 
 

@@ -196,7 +196,8 @@ async def _load_candidates(
     session: AsyncSession, window_hours: int, regenerating: int | None = None
 ) -> list[Candidate]:
     """Unstamped recent articles of the daily sections, plus (on --force) the articles of the
-    issue being replaced. Other sections (threat radar, research, management) stay unstamped."""
+    issue being replaced. Other sections (threat radar, research, management, cloud/DevOps,
+    software) stay unstamped."""
     cutoff = datetime.now(UTC) - timedelta(hours=window_hours)
     fresh = and_(Article.bulletin_id.is_(None), Article.fetched_at >= cutoff)
     scope = or_(fresh, Article.bulletin_id == regenerating) if regenerating is not None else fresh
