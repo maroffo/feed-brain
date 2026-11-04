@@ -128,3 +128,19 @@ def test_bulletin_builds_the_edition_it_is_asked_for(monkeypatch, tmp_path):
     monkeypatch.setattr("sys.argv", ["feed-brain", "bulletin", "--edition", "nope"])
     with pytest.raises(SystemExit):
         cli.main()
+
+
+def test_reextract_passes_its_window_and_threshold(monkeypatch):
+    from feed_brain import __main__ as cli
+    from feed_brain.services import fetcher
+
+    seen = {}
+
+    async def fake(hours, min_chars, settings=None):  # noqa: ARG001
+        seen.update(hours=hours, min_chars=min_chars)
+        return 2
+
+    monkeypatch.setattr(fetcher, "reextract_short", fake)
+    monkeypatch.setattr("sys.argv", ["feed-brain", "reextract", "--hours", "24"])
+    cli.main()
+    assert seen == {"hours": 24, "min_chars": 1500}

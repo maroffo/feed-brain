@@ -197,3 +197,108 @@ async def test_fetch_all_feeds_downloads_only_rss_sources(session_factory, monke
     await fetcher.fetch_all_feeds()
 
     assert fetched == ["RSS"]
+
+
+def test_the_article_link_wins_over_an_image_enclosure():
+    """DDay.it entries carry the article as rel=alternate and a JPEG as enclosure; feedparser's
+    `link` is the JPEG."""
+    from feedparser import FeedParserDict as D
+
+    from feed_brain.services.fetcher import _entry_url
+
+    article = "https://www.dday.it/redazione/59327/furto"
+    image = "https://images.dday.it/x/w:329/plain/crop.jpg"
+    dday = D(
+        link=image,
+        id=article,
+        links=[
+            D(rel="alternate", type="text/html", href=article),
+            D(rel="enclosure", type="image/jpeg", href=image),
+        ],
+    )
+    assert _entry_url(dday) == article
+    assert _entry_url(D(link="https://blog/x")) == "https://blog/x"  # plain feeds keep their link
+    only_enclosure = D(
+        link=image,
+        id="https://site/post",
+        links=[D(rel="enclosure", type="image/jpeg", href=image)],
+    )
+    assert _entry_url(only_enclosure) == "https://site/post"
+    assert _entry_url(D(title="no link")) is None
+
+
+async def test_reextract_refills_recent_short_articles_only(session_factory, monkeypatch):
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from feed_brain.config import Settings
+    from feed_brain.db.models import Article
+    from feed_brain.services import fetcher
+
+    now = datetime.now(UTC)
+    async with session_factory() as session:
+        session.add_all(
+            [
+                Article(url="https://p/teaser", title="t", content="teaser", fetched_at=now),
+                Article(url="https://p/full", title="t", content="x" * 3000, fetched_at=now),
+                Article(
+                    url="https://p/old",
+                    title="t",
+                    content="old",
+                    fetched_at=now - timedelta(days=5),
+                ),
+                Article(url="https://p/still", title="t", content="short", fetched_at=now),
+            ]
+        )
+        await session.commit()
+
+    async def fake_extract(url, settings):  # noqa: ARG001
+        return {"https://p/teaser": "testo completo " * 200, "https://p/still": "brev"}.get(url)
+
+    monkeypatch.setattr(fetcher, "extract_content", fake_extract)
+    refilled = await fetcher.reextract_short(
+        hours=48, min_chars=1500, settings=Settings(_env_file=None)
+    )
+
+    async with session_factory() as session:
+        contents = {a.url: a.content for a in (await session.execute(select(Article))).scalars()}
+    assert refilled == 1
+    assert contents["https://p/teaser"].startswith("testo completo")
+    assert contents["https://p/full"] == "x" * 3000 and contents["https://p/old"] == "old"
+    assert contents["https://p/still"] == "short"  # a shorter result never replaces the stored text
+
+
+async def test_reextract_measures_visible_text_and_skips_inbox_mails(session_factory, monkeypatch):
+    from sqlalchemy import select
+
+    from feed_brain.config import Settings
+    from feed_brain.db.models import Article
+    from feed_brain.services import fetcher
+
+    heavy_teaser = (
+        "<div>" + '<img src="https://cdn/x.jpg" alt="foto">' * 60 + "<p>Solo l'attacco.</p></div>"
+    )
+    now = datetime.now(UTC)
+    async with session_factory() as session:
+        session.add_all(
+            [
+                Article(url="https://p/heavy", title="t", content=heavy_teaser, fetched_at=now),
+                Article(url="mid:abc@mail", title="t", content="breve", fetched_at=now),
+            ]
+        )
+        await session.commit()
+    asked = []
+
+    async def fake_extract(url, settings):  # noqa: ARG001
+        asked.append(url)
+        return "testo completo " * 150  # 2250 chars of text, fewer raw chars than the teaser's HTML
+
+    monkeypatch.setattr(fetcher, "extract_content", fake_extract)
+    refilled = await fetcher.reextract_short(
+        hours=48, min_chars=1500, settings=Settings(_env_file=None)
+    )
+    async with session_factory() as session:
+        contents = {a.url: a.content for a in (await session.execute(select(Article))).scalars()}
+    assert asked == ["https://p/heavy"] and refilled == 1
+    assert contents["https://p/heavy"].startswith("testo completo")

@@ -10,13 +10,13 @@ import feedparser
 import httpx
 import structlog
 from bs4 import BeautifulSoup
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 
 from feed_brain.config import Settings, get_settings
 from feed_brain.db.models import RSS_FEED_TYPE, Article, FeedSource
 from feed_brain.db.session import get_session_factory
 from feed_brain.services import http
-from feed_brain.services.extractor import extract_content
+from feed_brain.services.extractor import extract_content, visible_length
 from feed_brain.textutil import clean_text
 
 log = structlog.get_logger()
@@ -121,6 +121,28 @@ async def fetch_all_feeds() -> int:
     return total_new
 
 
+def _entry_url(entry: object) -> str | None:
+    """The article's web address. An HTML rel=alternate link wins: some feeds (DDay.it) put a
+    cover image in `enclosure` and feedparser then reports it as `link`. An entry whose link
+    is an enclosure falls back to its id when that is a web address."""
+    links = getattr(entry, "links", None) or []
+    for link in links:
+        if (
+            link.get("rel") == "alternate"
+            and link.get("type", "text/html") in ("text/html", "")
+            and link.get("href")
+        ):
+            return link["href"]
+    enclosures = {link.get("href") for link in links if link.get("rel") == "enclosure"}
+    url = getattr(entry, "link", None)
+    if url and url not in enclosures:
+        return url
+    entry_id = getattr(entry, "id", None)
+    if isinstance(entry_id, str) and entry_id.startswith(("http://", "https://")):
+        return entry_id
+    return None
+
+
 def _entry_text(entry: object) -> str | None:
     """Plain text of the feed entry's summary, for pages that can't be extracted."""
     summary = getattr(entry, "summary", None)
@@ -154,7 +176,7 @@ async def _fetch_single_feed(
     entries = feed.entries[: settings.max_articles_per_feed]
 
     for entry in entries:
-        url = getattr(entry, "link", None)
+        url = _entry_url(entry)
         if not url:
             continue
 
@@ -190,3 +212,47 @@ async def _fetch_single_feed(
         log.info("article_fetched", title=getattr(entry, "title", "Untitled"), url=url)
 
     return result
+
+
+async def reextract_short(hours: int, min_chars: int, settings: Settings | None = None) -> int:
+    """Extract again the web articles fetched in the last `hours` whose stored text is shorter
+    than `min_chars` visible characters (teasers, failed extractions). A result replaces the
+    stored text only when it has more visible text. Returns how many articles got longer text."""
+    settings = settings or get_settings()
+    cutoff = datetime.now(UTC) - timedelta(hours=hours)
+    factory = get_session_factory()
+    async with factory() as session:
+        stored = (
+            await session.execute(
+                select(Article.id, Article.url, Article.content)
+                .where(Article.fetched_at >= cutoff)
+                .where(Article.url.like("http%"))  # inbox mails (mid:...) have no page to fetch
+                # raw length >= visible length: a generous prefilter, measured exactly below
+                .where(func.coalesce(func.length(Article.content), 0) < min_chars * 4)
+            )
+        ).all()
+    rows = [
+        (article_id, url, length)
+        for article_id, url, content in stored
+        if (length := visible_length(content)) < min_chars
+    ]
+    semaphore = asyncio.Semaphore(settings.fetch_concurrency)
+
+    async def _one(url: str) -> str | None:
+        async with semaphore:
+            return await extract_content(url, settings)
+
+    results = await asyncio.gather(*(_one(url) for _, url, _ in rows))
+    refilled = 0
+    async with factory() as session:
+        for (article_id, url, length), content in zip(rows, results, strict=True):
+            text = clean_text(content)
+            if text and visible_length(text) > length:
+                await session.execute(
+                    update(Article).where(Article.id == article_id).values(content=text)
+                )
+                refilled += 1
+                log.info("article_reextracted", url=url, before=length, after=visible_length(text))
+        await session.commit()
+    log.info("reextract_done", candidates=len(rows), refilled=refilled)
+    return refilled
