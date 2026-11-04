@@ -3,6 +3,7 @@
 
 from feed_brain.config import Settings
 from feed_brain.db.models import Article
+from feed_brain.models import EssaySection
 from feed_brain.services import essay as essay_mod
 from feed_brain.services.essay import EssayDraft, essay_prompt, write_essays
 from feed_brain.services.ranking import Candidate, Story
@@ -64,7 +65,16 @@ async def test_write_essays_keys_by_lead_and_cleans_paragraphs(monkeypatch):
         assert schema is EssayDraft and "<source>" in user
         if title == "rifiutata":
             return None  # refusal, truncation or API error
-        return EssayDraft(paragraphs=["  Primo\x00 paragrafo. ", "", "Secondo."])
+        return EssayDraft(
+            lede="  L'essenziale\x00 in due frasi. ",
+            sections=[
+                EssaySection(
+                    heading=" Come sono entrati ", paragraphs=["  Primo. ", "", "Secondo."]
+                ),
+                EssaySection(heading="Vuota", paragraphs=["  "]),
+            ],
+            watch=[" L'indagine belga ", ""],
+        )
 
     monkeypatch.setattr(essay_mod, "opus_structured", fake_opus)
     good = Story("security", [_cand(1), _cand(2)], "buona")
@@ -75,13 +85,20 @@ async def test_write_essays_keys_by_lead_and_cleans_paragraphs(monkeypatch):
 
     assert sorted(calls) == ["buona", "rifiutata"]
     assert set(essays) == {good.lead.article_id}
-    assert essays[good.lead.article_id].paragraphs == ["Primo paragrafo.", "Secondo."]
-    assert essays[good.lead.article_id].sources_read == 1
+    essay = essays[good.lead.article_id]
+    assert essay.lede == "L'essenziale in due frasi."
+    assert essay.sections == [
+        EssaySection(heading="Come sono entrati", paragraphs=["Primo.", "Secondo."])
+    ]
+    assert essay.watch == ["L'indagine belga"]
+    assert essay.sources_read == 1 and essay.paragraphs == []
 
 
 async def test_no_client_or_an_empty_essay_means_no_essay(monkeypatch):
     async def empty(*_args):
-        return EssayDraft(paragraphs=["  ", ""])
+        return EssayDraft(
+            lede="  ", sections=[EssaySection(heading="H", paragraphs=[""])], watch=["W"]
+        )
 
     monkeypatch.setattr(essay_mod, "opus_structured", empty)
     story = Story("security", [_cand(1)], "h")
@@ -107,3 +124,45 @@ def test_titles_outlets_and_any_case_of_the_tag_cannot_forge_or_close_a_source()
     )
     assert prompt.lower().count("<source>") == 1 and prompt.lower().count("</source>") == 1
     assert "Titolo" in prompt and "ANSA" in prompt  # neutralized, not dropped
+
+
+async def test_no_dashes_survive_whatever_the_model_writes(monkeypatch):
+    """Long and en dashes become commas (ranges between numbers a hyphen): a hard rule."""
+
+    async def dashed(*_args):
+        return EssayDraft(
+            lede="Hanno colpito i frigoriferi — non le casse.",
+            sections=[
+                EssaySection(heading="Chi – e come", paragraphs=["Tra 10–15 negozi—forse di più."])
+            ],
+            watch=["L'indagine — se arriva"],
+        )
+
+    monkeypatch.setattr(essay_mod, "opus_structured", dashed)
+    story = Story("security", [_cand(1)], "h")
+    essay = (await write_essays([story], {1: _article(1, "A" * 500)}, object(), SETTINGS))[
+        story.lead.article_id
+    ]
+    assert essay.lede == "Hanno colpito i frigoriferi, non le casse."
+    assert essay.sections[0].heading == "Chi, e come"
+    assert essay.sections[0].paragraphs == ["Tra 10-15 negozi, forse di più."]
+    assert essay.watch == ["L'indagine, se arriva"]
+
+
+async def test_a_lede_without_any_section_is_no_essay(monkeypatch):
+    async def lede_only(*_args):
+        return EssayDraft(
+            lede="Due frasi.", sections=[EssaySection(heading="H", paragraphs=[" "])], watch=["W"]
+        )
+
+    monkeypatch.setattr(essay_mod, "opus_structured", lede_only)
+    story = Story("security", [_cand(1)], "h")
+    assert await write_essays([story], {1: _article(1, "A" * 500)}, object(), SETTINGS) == {}
+
+
+def test_the_prompt_assumes_a_technical_reader_and_forbids_repeats_and_lessons():
+    from feed_brain.services.essay import SYSTEM_PROMPT
+
+    assert "knows software, cloud and security" in SYSTEM_PROMPT
+    assert "Do not repeat a fact" in SYSTEM_PROMPT
+    assert "belongs to its heading" in SYSTEM_PROMPT

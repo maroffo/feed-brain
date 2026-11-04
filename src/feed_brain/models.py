@@ -177,11 +177,21 @@ class SourceRef(BaseModel):
     paid: bool = False  # newsletter inbox: the public page shows title and link only
 
 
+class EssaySection(BaseModel):
+    """One titled part of an essay."""
+
+    heading: str
+    paragraphs: list[str]
+
+
 class StoryEssay(BaseModel):
     """Opus essay behind a top story, served privately by the vote service."""
 
-    paragraphs: list[str]
     sources_read: int  # sources that went in with their full text (the rest: summary only)
+    lede: str = ""  # two sentences: what happened and why it matters
+    sections: list[EssaySection] = Field(default_factory=list)
+    watch: list[str] = Field(default_factory=list)  # 'Cosa seguire'
+    paragraphs: list[str] = Field(default_factory=list)  # essays of 4 Nov 2026, before sections
 
 
 class TopStory(BaseModel):
