@@ -42,7 +42,7 @@ SECTIONS_GUIDE = """\
 - software: software engineering, architecture, languages, practices, engineering leadership and org design (Fowler, InfoQ, DZone)
 - management: agile methodology, Scrum, project management
 - research: research papers (arXiv) not better placed in ai
-- politics: Italian, European and world politics, justice and prisons
+- politics: Italian, European and world politics, major news events (attacks, shootings, disasters, trials), justice and prisons
 - economy: economics and public finance
 - culture: culture, essays, personal blogs, science skepticism, music, comics
 - sport: sport"""

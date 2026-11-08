@@ -9,7 +9,9 @@
 - Software architecture and distributed systems: patterns, scalability case studies, Go concurrency and performance
 - Engineering management: productivity frameworks (SPACE, DORA), technical debt strategies, org design
 - DevOps and cloud architecture: Kubernetes, Terraform, observability, significant GCP/AWS platform changes
-- Italian and European politics, geopolitics, trade policy; justice system and prison reform
+- Italian and European politics, geopolitics, trade policy
+- Major news events in Italy and Europe: terror attacks, shootings and other mass-casualty crimes, disasters, trials of national relevance
+- Justice system and prison reform at national level: laws and reforms, national reports (CPT, Antigone, Garante), overcrowding data, deaths in custody
 - Economics with data or original analysis: Italian public finance, labor, EU economy
 
 **Medium interest (tier: medium)**
@@ -19,6 +21,8 @@
 - Engineering leadership, hiring, team practices
 - Research papers in software engineering and AI with practical, reproducible results
 - Long-form culture and essays, personal blogs with original thought, science skepticism
+- Prison and justice news of local reach: a single facility's conditions or protests, local seminars, agreements and projects
+- Local crime news without national or European relevance
 - Leisure the reader chose: long-form sport analysis (rugby, cycling, basketball, football tactics), jazz album reviews, comics
 
 **Low interest (tier: low)**

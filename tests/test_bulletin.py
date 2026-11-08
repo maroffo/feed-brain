@@ -556,10 +556,11 @@ async def test_opus_runs_only_on_the_first_leads_with_enough_text(session_factor
         source = FeedSource(name="Il Post", url="https://post/feed")
         session.add(source)
         await session.flush()
+        # Sections without an editorial weight, so confidence alone sets the rank.
         rows = [
-            ("first", "security", 0.9, LONG_TEXT),
-            ("thin", "politics", 0.8, "Solo il titolo."),
-            ("third", "economy", 0.7, LONG_TEXT),
+            ("first", "tech", 0.9, LONG_TEXT),
+            ("thin", "culture", 0.8, "Solo il titolo."),
+            ("third", "sport", 0.7, LONG_TEXT),
         ]
         articles = [
             Article(
