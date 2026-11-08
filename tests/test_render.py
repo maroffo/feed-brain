@@ -288,8 +288,8 @@ def test_weekly_public_page_hides_arc_text_backed_by_paid_sources():
 
 
 def test_briefs_name_their_outlets_without_repeating_titles():
-    """The headline already links the lead article: a brief adds outlet names only (keeps the
-    email under Gmail's clip size); the other outlets link their own article."""
+    """A brief adds outlet names only, never the article titles (keeps the email under Gmail's
+    clip size); every outlet name links its own article, the lead one included."""
     multi = BriefItem(
         headline="Due fonti",
         summary="",
@@ -308,9 +308,9 @@ def test_briefs_name_their_outlets_without_repeating_titles():
         }
     )
     html = render_bulletin_html(data)
-    assert html.count('href="https://onrugby/x"') == 1
-    assert "On Rugby" in html and "On Rugby: Italia" not in html
-    assert html.count('href="https://krebs/x"') == 1  # the headline only
+    assert '<a href="https://onrugby/x">On Rugby</a>' in html
+    assert "On Rugby: Italia" not in html
+    assert '<a href="https://krebs/x">Krebs</a>' in html  # the lead outlet, besides the headline
     assert "Krebs: A" not in html and "Il Post: B" not in html
     assert '<a href="https://post/y">Il Post</a>' in html
 

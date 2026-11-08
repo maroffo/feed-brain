@@ -18,10 +18,10 @@
 {%- for name, url, count in refs | by_outlet %}{{ link(url, name) }}{% if count > 1 %} ({{ count }}){% endif %}{% if not loop.last %} · {% endif %}{% endfor -%}
 </div>
 {%- endmacro %}
-{#- After a brief's headline, which links the lead article: the lead outlet by name, the others linked. -#}
+{#- After a brief's headline: each outlet by name, linking its first article (the lead one too). -#}
 {% macro brief_outlets(refs) -%}
 <span class="more">
-{%- for name, url, count in refs | by_outlet %} · {% if loop.first %}{{ name }}{% else %}{{ link(url, name) }}{% endif %}{% if count > 1 %} ({{ count }}){% endif %}{% endfor -%}
+{%- for name, url, count in refs | by_outlet %} · {{ link(url, name) }}{% if count > 1 %} ({{ count }}){% endif %}{% endfor -%}
 </span>
 {%- endmacro %}
 {% macro notes(analysis) -%}
