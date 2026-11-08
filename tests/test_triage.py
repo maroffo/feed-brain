@@ -227,20 +227,24 @@ async def test_retriage_reclassifies_recent_articles_and_keeps_their_status(sess
     """After a profile change: recent triaged articles get the new verdict, nothing else moves."""
     now = datetime.now(UTC)
     old = {"tier": "high", "section": "politics", "confidence": 0.95, "summary": "Vecchio."}
+    kept = {"bulletin_id": 7, "deep_summary": "Analisi."}
     await _seed(
         session_factory,
-        Article(
-            url="https://k/1",
-            title="Local",
-            content="c",
-            status="analyzed",
-            fetched_at=now,
-            bulletin_id=None,
-            **old,
+        *(
+            Article(
+                url=f"https://k/{status}",
+                title=status,
+                content="c",
+                status=status,
+                fetched_at=now,
+                **old,
+                **kept,
+            )
+            for status in ("triaged", "analyzed", "integrated")
         ),
-        Article(url="https://k/2", title="Fresh", content="c", status="new", fetched_at=now),
+        Article(url="https://k/new", title="Fresh", content="c", status="new", fetched_at=now),
         Article(
-            url="https://k/3",
+            url="https://k/old",
             title="Stale",
             content="c",
             status="triaged",
@@ -248,14 +252,17 @@ async def test_retriage_reclassifies_recent_articles_and_keeps_their_status(sess
             **old,
         ),
     )
-    gemini = FakeGemini({"Local": _result(tier="medium", section="politics", confidence=0.7)})
+    new_verdict = _result(tier="medium", section="politics", confidence=0.7)
+    gemini = FakeGemini(dict.fromkeys(("triaged", "analyzed", "integrated"), new_verdict))
 
-    assert await triage_new_articles(gemini=gemini, retriage=True) == 1
+    assert await triage_new_articles(gemini=gemini, retriage=True) == 3
 
     async with session_factory() as session:
         rows = {a.title: a for a in (await session.execute(select(Article))).scalars()}
-    assert (rows["Local"].tier, rows["Local"].confidence) == ("medium", 0.7)
-    assert rows["Local"].status == "analyzed"  # its stored deep analysis stays valid
+    for status in ("triaged", "analyzed", "integrated"):
+        row = rows[status]
+        assert (row.tier, row.confidence, row.status) == ("medium", 0.7, status)
+        assert (row.bulletin_id, row.deep_summary) == (7, "Analisi.")
     assert rows["Fresh"].status == "new"  # left to the regular triage
     assert (rows["Stale"].tier, rows["Stale"].summary) == ("high", "Vecchio.")
-    assert [p for p in gemini.prompts if "Title: Local" in p] == gemini.prompts
+    assert len(gemini.prompts) == 3
