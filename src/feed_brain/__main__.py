@@ -102,16 +102,16 @@ async def _run_fetch() -> None:
         await _shutdown()
 
 
-def cmd_triage(_args: argparse.Namespace) -> None:
-    """Triage new articles with Gemini."""
-    asyncio.run(_run_triage())
+def cmd_triage(args: argparse.Namespace) -> None:
+    """Triage new articles with Gemini (--retriage: classify recent ones again)."""
+    asyncio.run(_run_triage(args.retriage))
 
 
-async def _run_triage() -> None:
+async def _run_triage(retriage: bool) -> None:
     try:
         from feed_brain.services.triage import triage_new_articles
 
-        triaged = await triage_new_articles()
+        triaged = await triage_new_articles(retriage=retriage)
         log.info("triage_done", triaged=triaged)
     finally:
         await _shutdown()
@@ -459,7 +459,13 @@ def main() -> None:
     )
 
     # triage
-    subparsers.add_parser("triage", help="Triage new articles with Gemini")
+    triage_parser = subparsers.add_parser("triage", help="Triage new articles with Gemini")
+    triage_parser.add_argument(
+        "--retriage",
+        action="store_true",
+        help="Classify again the triaged articles of the last ARTICLE_MAX_AGE_HOURS "
+        "(after a profile change); statuses and bulletin stamps stay",
+    )
 
     # analyze
     analyze_parser = subparsers.add_parser("analyze", help="Deep-analyze one article with Opus")

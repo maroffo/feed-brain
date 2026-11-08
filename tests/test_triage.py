@@ -189,10 +189,10 @@ async def test_triage_store_failure_skips_article_and_continues(session_factory,
     )
     real_apply = triage_mod._apply
 
-    async def flaky_apply(session, article_id, result):
+    async def flaky_apply(session, article_id, result, **kwargs):
         if result.summary == "poison":
             raise DBAPIError("UPDATE", {}, Exception("invalid byte sequence"))
-        await real_apply(session, article_id, result)
+        await real_apply(session, article_id, result, **kwargs)
 
     monkeypatch.setattr(triage_mod, "_apply", flaky_apply)
     gemini = FakeGemini({"Bad": _result(summary="poison")})
@@ -221,3 +221,48 @@ def test_the_reader_stack_reaches_the_triage_prompt():
     for tech in ("Go", "Rust", "PostgreSQL", "Kubernetes", "Terraform", "macOS", "Android"):
         assert tech in SYSTEM_PROMPT
     assert "ABOUTME" not in SYSTEM_PROMPT
+
+
+async def test_retriage_reclassifies_recent_articles_and_keeps_their_status(session_factory):
+    """After a profile change: recent triaged articles get the new verdict, nothing else moves."""
+    now = datetime.now(UTC)
+    old = {"tier": "high", "section": "politics", "confidence": 0.95, "summary": "Vecchio."}
+    kept = {"bulletin_id": 7, "deep_summary": "Analisi."}
+    await _seed(
+        session_factory,
+        *(
+            Article(
+                url=f"https://k/{status}",
+                title=status,
+                content="c",
+                status=status,
+                fetched_at=now,
+                **old,
+                **kept,
+            )
+            for status in ("triaged", "analyzed", "integrated")
+        ),
+        Article(url="https://k/new", title="Fresh", content="c", status="new", fetched_at=now),
+        Article(
+            url="https://k/old",
+            title="Stale",
+            content="c",
+            status="triaged",
+            fetched_at=now - timedelta(days=5),
+            **old,
+        ),
+    )
+    new_verdict = _result(tier="medium", section="politics", confidence=0.7)
+    gemini = FakeGemini(dict.fromkeys(("triaged", "analyzed", "integrated"), new_verdict))
+
+    assert await triage_new_articles(gemini=gemini, retriage=True) == 3
+
+    async with session_factory() as session:
+        rows = {a.title: a for a in (await session.execute(select(Article))).scalars()}
+    for status in ("triaged", "analyzed", "integrated"):
+        row = rows[status]
+        assert (row.tier, row.confidence, row.status) == ("medium", 0.7, status)
+        assert (row.bulletin_id, row.deep_summary) == (7, "Analisi.")
+    assert rows["Fresh"].status == "new"  # left to the regular triage
+    assert (rows["Stale"].tier, rows["Stale"].summary) == ("high", "Vecchio.")
+    assert len(gemini.prompts) == 3

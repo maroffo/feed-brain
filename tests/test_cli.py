@@ -144,3 +144,20 @@ def test_reextract_passes_its_window_and_threshold(monkeypatch):
     monkeypatch.setattr("sys.argv", ["feed-brain", "reextract", "--hours", "24"])
     cli.main()
     assert seen == {"hours": 24, "min_chars": 1500}
+
+
+def test_triage_passes_the_retriage_flag(monkeypatch):
+    from feed_brain import __main__ as cli
+    from feed_brain.services import triage
+
+    seen = []
+
+    async def fake(gemini=None, *, retriage=False):  # noqa: ARG001
+        seen.append(retriage)
+        return 0
+
+    monkeypatch.setattr(triage, "triage_new_articles", fake)
+    for argv in (["feed-brain", "triage"], ["feed-brain", "triage", "--retriage"]):
+        monkeypatch.setattr("sys.argv", argv)
+        cli.main()
+    assert seen == [False, True]

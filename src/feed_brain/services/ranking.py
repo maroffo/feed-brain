@@ -1,9 +1,14 @@
-# ABOUTME: Deterministic ranking of bulletin stories: tier weight + multi-source boost + confidence.
+# ABOUTME: Deterministic ranking of bulletin stories: tier, multi-source boost, confidence, section.
 # ABOUTME: Pure functions and dataclasses, no I/O; the plan's single source of truth for "importance".
 
 from dataclasses import dataclass
 
 TIER_WEIGHT = {"high": 2.0, "medium": 1.0, "low": 0.0}
+# Editorial balance of the main issue: politics (major news events included) and economy
+# rise, security sinks so that only its biggest multi-source stories still lead. Unlisted
+# sections weigh 0, so the thematic editions keep the plain score. Only top stories move:
+# briefs are listed per section, where a shared weight never changes the order.
+SECTION_WEIGHT = {"politics": 0.5, "economy": 0.5, "security": -0.5}
 
 
 def source_boost(distinct_sources: int) -> float:
@@ -50,7 +55,8 @@ class Story:
     def score(self) -> float:
         tier = max(TIER_WEIGHT.get(c.tier, 0.0) for c in self.articles)
         confidence = max(c.confidence for c in self.articles)
-        return tier + source_boost(self.distinct_sources) + confidence
+        section = SECTION_WEIGHT.get(self.section, 0.0)
+        return tier + source_boost(self.distinct_sources) + confidence + section
 
 
 def rank_stories(stories: list[Story]) -> list[Story]:

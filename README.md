@@ -11,7 +11,7 @@ Cloud Scheduler 06:30 Europe/Rome
                     → triage (Gemini Flash: tier, section, vault category)
        2. editions  for the main issue, then each thematic one (Ingegneria, AI per sviluppatori,
                     Ricerca, Radar minacce): candidates (last 36h, high/medium, the edition's sections)
-                    → cluster per section (Gemini) → rank (tier + multi-source boost + confidence)
+                    → cluster per section (Gemini) → rank (tier + multi-source boost + confidence + section weight)
                     → deep analysis of the first 3 top leads (Claude Opus 5.5, optional)
                     → an essay per top story from the text of all its sources (Opus, optional)
                     → write (Gemini) → store → publish page + email + vault outbox; empty: skipped
@@ -32,7 +32,7 @@ Mac (launchd, hourly)
 - **Issue shape**: 'Il punto' as 3-5 key points, 5 top stories (3 in a thematic edition), 3 'In breve' items per section (forwarded newsletters always shown). Analyzed stories show the source's money quote; insights and to-dos only when the analysis finds something actionable for the reader. Writing is telegraphic: no moral closer, no outlet names in the prose.
 - **Interest profile**: `src/feed_brain/interests.md`, plain Markdown injected into the triage prompt. Edit it to change what counts as high, medium or low.
 - **Stack**: `src/feed_brain/stack.md`, the technologies the reader runs, injected into the triage prompt next to the interests. A CVE on the stack is medium (high when actively exploited); off the stack it stays low and out of the Radar minacce.
-- **Ranking**: `score = tier weight (high 2, medium 1) + source boost (2 feeds 0.5, 3 feeds 0.8, 4+ 1.0) + confidence`.
+- **Ranking**: `score = tier weight (high 2, medium 1) + source boost (2 feeds 0.5, 3 feeds 0.8, 4+ 1.0) + confidence + section weight (politics +0.5, economy +0.5, security -0.5; other sections 0)`. The section weight only moves the main issue's top stories.
 - **Idempotency**: one issue per day per edition (`--force` regenerates that edition only); each article is covered once; `published_at` / `sent_at` make job retries safe.
 - **Newsletter inbox**: paid newsletters forwarded from Gmail to any address on `in.behindbars.news` land in S3 (SES receiving, eu-west-1) and become articles during `collect`. Tracking links are decoded offline and reduced to the clean post URL (they carry personal tokens); only text is stored. Forwarded newsletters are always bulletin candidates. On the public page their stories show title and link only; email and vault keep everything.
 - **Story votes**: every story of the email (top stories and 'In breve') carries vote links: 'più così · meno così' under a top story, '+ −' at the end of a brief. Each link is signed with HMAC over `issue_date`, a hash of the story's first source URL and the vote. The link opens a page of the `serve` service whose script casts the vote, so link scanners that open mail links without running JS record nothing; a `<noscript>` button covers browsers without JS. The last click wins, the page offers 'Annulla'. Votes on issues older than 30 days are refused. The public page and the vault note carry no buttons.
@@ -77,7 +77,7 @@ make test-e2e    # Alembic + asyncpg integration tests on the docker Postgres
 | `migrate` | Apply Alembic migrations |
 | `analyze --article-id N` | Opus deep analysis of one article |
 | `reextract [--hours 48] [--min-chars 1500]` | Extract again recent articles whose stored text is short (teasers, failed pages); longer text replaces the stored one |
-| `import-opml FILE [--sync]`, `fetch`, `triage`, `list`, `reset`, `integrate` | Maintenance |
+| `import-opml FILE [--sync]`, `fetch`, `triage [--retriage]`, `list`, `reset`, `integrate` | Maintenance (`--retriage`: classify the last 48h again after an `interests.md` change) |
 
 ## Configuration
 

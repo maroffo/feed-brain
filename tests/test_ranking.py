@@ -1,7 +1,10 @@
 # ABOUTME: Tests for the deterministic story ranking used by the daily bulletin.
-# ABOUTME: Score = tier weight + multi-source boost + confidence; top selection and cap.
+# ABOUTME: Score = tier weight + multi-source boost + confidence + section weight; top selection.
+
+import pytest
 
 from feed_brain.services.ranking import (
+    SECTION_WEIGHT,
     Candidate,
     Story,
     rank_stories,
@@ -30,11 +33,11 @@ def test_source_boost_steps():
 
 def test_story_score_uses_max_tier_distinct_sources_and_max_confidence():
     story = Story(
-        section="security",
+        section="tech",
         articles=[
-            _c(1, source="Krebs", tier="high", confidence=0.7),
-            _c(2, source="Krebs", tier="medium", confidence=0.9),
-            _c(3, source="Schneier", tier="low", confidence=0.4),
+            _c(1, source="Ars", tier="high", confidence=0.7),
+            _c(2, source="Ars", tier="medium", confidence=0.9),
+            _c(3, source="Register", tier="low", confidence=0.4),
         ],
         headline="h",
     )
@@ -56,7 +59,7 @@ def test_lead_prefers_confidence_then_longer_content():
 
 
 def test_rank_orders_by_score_with_multi_source_beating_single_high():
-    single_high = Story("security", [_c(1, tier="high", confidence=0.6)], "a")
+    single_high = Story("tech", [_c(1, tier="high", confidence=0.6)], "a")
     multi_medium = Story(
         "tech",
         [
@@ -78,3 +81,29 @@ def test_select_top_caps_and_keeps_the_rest_ranked():
     top, rest = select_top(stories, 3)
     assert [s.headline for s in top] == ["s7", "s6", "s5"]
     assert [s.headline for s in rest] == ["s4", "s3", "s2"]
+
+
+def test_section_weight_favours_politics_and_economy_over_security():
+    assert SECTION_WEIGHT == {"politics": 0.5, "economy": 0.5, "security": -0.5}
+    same = [_c(1, tier="high", confidence=0.9)]
+    scores = {section: Story(section, same, "h").score for section in SECTION_WEIGHT}
+    assert scores == pytest.approx({"politics": 3.4, "economy": 3.4, "security": 2.4})
+    # Sections without a weight, and every thematic edition's sections, keep the plain score.
+    assert Story("ai", same, "h").score == pytest.approx(2.9)
+    assert Story("threat_radar", same, "h").score == pytest.approx(2.9)
+
+
+def test_single_source_politics_beats_two_source_security_but_not_a_major_breach():
+    politics = Story("politics", [_c(1, tier="high", confidence=0.9)], "politics")  # 3.4
+    security_two = Story(
+        "security",
+        [_c(2, source="A", tier="high", confidence=0.9), _c(3, source="B", tier="high")],
+        "security_two",
+    )  # 2.0 + 0.5 + 0.9 - 0.5 = 2.9
+    major_breach = Story(
+        "security",
+        [_c(i, source=f"S{i}", tier="high", confidence=0.95) for i in range(4, 9)],
+        "major_breach",
+    )  # 2.0 + 1.0 + 0.95 - 0.5 = 3.45
+    ranked = rank_stories([security_two, politics, major_breach])
+    assert [s.headline for s in ranked] == ["major_breach", "politics", "security_two"]
