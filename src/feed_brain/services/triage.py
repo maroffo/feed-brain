@@ -22,6 +22,7 @@ from feed_brain.textutil import clean_text
 log = structlog.get_logger()
 
 CONTENT_PREVIEW_CHARS = 3000
+RETRIAGE_STATUSES = (ArticleStatus.TRIAGED, ArticleStatus.ANALYZED, ArticleStatus.INTEGRATED)
 
 
 def _load_profile(name: str) -> str:
@@ -127,31 +128,37 @@ async def triage_article(item: TriageInput, gemini: StructuredLLM) -> TriageResu
         return None
 
 
-async def _apply(session: AsyncSession, article_id: int, result: TriageResult) -> None:
-    await session.execute(
-        update(Article)
-        .where(Article.id == article_id)
-        .values(
-            tier=result.tier.value,
-            section=result.section.value,
-            category=result.category.value,
-            confidence=result.confidence,
-            summary=clean_text(result.summary),
-            reason=clean_text(result.reason),
-            classified_at=datetime.now(UTC),
-            status=ArticleStatus.TRIAGED,
-        )
-    )
+async def _apply(
+    session: AsyncSession, article_id: int, result: TriageResult, *, keep_status: bool = False
+) -> None:
+    values = {
+        "tier": result.tier.value,
+        "section": result.section.value,
+        "category": result.category.value,
+        "confidence": result.confidence,
+        "summary": clean_text(result.summary),
+        "reason": clean_text(result.reason),
+        "classified_at": datetime.now(UTC),
+    }
+    if not keep_status:
+        values["status"] = ArticleStatus.TRIAGED
+    await session.execute(update(Article).where(Article.id == article_id).values(**values))
     await session.commit()
 
 
-async def triage_new_articles(gemini: StructuredLLM | None = None) -> int:
+async def triage_new_articles(
+    gemini: StructuredLLM | None = None, *, retriage: bool = False
+) -> int:
     """Triage recent 'new' articles with content. Returns how many were triaged.
 
     Gemini calls run concurrently (bounded by triage_concurrency) on immutable
     snapshots; every DB write happens in this coroutine's session, one commit per
     article. Failed articles (LLM or DB) stay 'new' and are retried on the next run
     until they age out of the article_max_age_hours window.
+
+    With retriage, the already triaged articles of that window are classified again
+    (after a profile change) and keep their status, so stored analyses and bulletin
+    stamps stay as they are; 'new' ones are left to the regular triage.
     """
     settings = get_settings()
     if gemini is None:
@@ -177,7 +184,9 @@ async def triage_new_articles(gemini: StructuredLLM | None = None) -> int:
                 )
                 .outerjoin(FeedSource, Article.source_id == FeedSource.id)
                 .where(
-                    Article.status == ArticleStatus.NEW,
+                    Article.status.in_(RETRIAGE_STATUSES)
+                    if retriage
+                    else Article.status == ArticleStatus.NEW,
                     Article.content.isnot(None),
                     Article.fetched_at >= cutoff,
                 )
@@ -200,7 +209,7 @@ async def triage_new_articles(gemini: StructuredLLM | None = None) -> int:
                 if result is None:
                     continue
                 try:
-                    await _apply(session, item.article_id, result)
+                    await _apply(session, item.article_id, result, keep_status=retriage)
                 except SQLAlchemyError as e:
                     await session.rollback()
                     log.error("triage_store_failed", title=item.title[:80], error=str(e)[:200])

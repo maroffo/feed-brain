@@ -189,10 +189,10 @@ async def test_triage_store_failure_skips_article_and_continues(session_factory,
     )
     real_apply = triage_mod._apply
 
-    async def flaky_apply(session, article_id, result):
+    async def flaky_apply(session, article_id, result, **kwargs):
         if result.summary == "poison":
             raise DBAPIError("UPDATE", {}, Exception("invalid byte sequence"))
-        await real_apply(session, article_id, result)
+        await real_apply(session, article_id, result, **kwargs)
 
     monkeypatch.setattr(triage_mod, "_apply", flaky_apply)
     gemini = FakeGemini({"Bad": _result(summary="poison")})
@@ -221,3 +221,41 @@ def test_the_reader_stack_reaches_the_triage_prompt():
     for tech in ("Go", "Rust", "PostgreSQL", "Kubernetes", "Terraform", "macOS", "Android"):
         assert tech in SYSTEM_PROMPT
     assert "ABOUTME" not in SYSTEM_PROMPT
+
+
+async def test_retriage_reclassifies_recent_articles_and_keeps_their_status(session_factory):
+    """After a profile change: recent triaged articles get the new verdict, nothing else moves."""
+    now = datetime.now(UTC)
+    old = {"tier": "high", "section": "politics", "confidence": 0.95, "summary": "Vecchio."}
+    await _seed(
+        session_factory,
+        Article(
+            url="https://k/1",
+            title="Local",
+            content="c",
+            status="analyzed",
+            fetched_at=now,
+            bulletin_id=None,
+            **old,
+        ),
+        Article(url="https://k/2", title="Fresh", content="c", status="new", fetched_at=now),
+        Article(
+            url="https://k/3",
+            title="Stale",
+            content="c",
+            status="triaged",
+            fetched_at=now - timedelta(days=5),
+            **old,
+        ),
+    )
+    gemini = FakeGemini({"Local": _result(tier="medium", section="politics", confidence=0.7)})
+
+    assert await triage_new_articles(gemini=gemini, retriage=True) == 1
+
+    async with session_factory() as session:
+        rows = {a.title: a for a in (await session.execute(select(Article))).scalars()}
+    assert (rows["Local"].tier, rows["Local"].confidence) == ("medium", 0.7)
+    assert rows["Local"].status == "analyzed"  # its stored deep analysis stays valid
+    assert rows["Fresh"].status == "new"  # left to the regular triage
+    assert (rows["Stale"].tier, rows["Stale"].summary) == ("high", "Vecchio.")
+    assert [p for p in gemini.prompts if "Title: Local" in p] == gemini.prompts
